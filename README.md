@@ -130,7 +130,6 @@ If you run into Gradle daemon or JDK issues, open the project in Android Studio 
 
 - The `app` module contains Android sources. The project uses Kotlin (inferred) and Gradle Kotlin DSL build scripts.
 - ProGuard / R8 rules live in `app/proguard-rules.pro` for release builds.
-- There is a `credentials.txt` in `app/` containing example or developer credentials. Remove this before sharing the repo publicly.
 
 ## Architecture
 
