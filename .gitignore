@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Ignore local credentials containing client id/secret
+app/credentials.txt
