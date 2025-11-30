@@ -3,6 +3,9 @@
 /local.properties
 /.idea
 .idea
+/.kotlin/sessions
+/.kotlin/errors
+.kotlin
 .DS_Store
 /build
 /captures
