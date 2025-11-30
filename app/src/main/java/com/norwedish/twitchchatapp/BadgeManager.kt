@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Loads and caches badge images (global and per-channel) used in chat message rendering.
+ */
+
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*

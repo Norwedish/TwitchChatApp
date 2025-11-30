@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Settings screen composable for chat-related preferences (notice suppression, appearance, etc.).
+ */
+
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
@@ -141,4 +145,3 @@ fun ChatSettingsScreen(
         }
     }
 }
-

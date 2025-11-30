@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Lightweight persistence helper for whisper conversations and unread counts using SharedPreferences.
+ */
+
 import android.content.Context
 import android.content.SharedPreferences
 import kotlinx.serialization.encodeToString
@@ -80,4 +84,3 @@ class WhisperPreferenceManager(context: Context) {
         sharedPreferences.edit().clear().apply()
     }
 }
-

@@ -1,5 +1,10 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Data models used by the whisper (direct message) subsystem.
+ * Includes message, conversation and EventSub payload shapes.
+ */
+
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.text.SimpleDateFormat

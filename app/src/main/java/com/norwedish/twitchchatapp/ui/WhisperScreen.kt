@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Whisper UI: screens and composables for direct messages (conversation list and detail views).
+ */
+
 import android.graphics.RenderEffect
 import android.graphics.Shader
 import android.os.Build

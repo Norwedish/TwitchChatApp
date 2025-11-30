@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Callback helpers invoked when Cast sessions start and end; provides hooks to other app components.
+ */
+
 import android.util.Log
 
 /**

@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Provides CastOptions used by the Cast SDK integration.
+ */
+
 import android.content.Context
 import com.google.android.gms.cast.framework.CastOptions
 import com.google.android.gms.cast.framework.OptionsProvider

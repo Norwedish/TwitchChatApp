@@ -1,5 +1,10 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * ViewModel that orchestrates the OAuth login flow and exposes login state to the UI.
+ * Responsible for starting/stopping the embedded `LoginServer` and delivering tokens to callers.
+ */
+
 import android.content.Context
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.lifecycle.ViewModel

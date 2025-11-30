@@ -1,5 +1,10 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Data models for Twitch EventSub payloads used by services that subscribe to Twitch EventSub.
+ * These classes mirror the JSON shapes received over EventSub WebSocket or HTTP notifications.
+ */
+
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 

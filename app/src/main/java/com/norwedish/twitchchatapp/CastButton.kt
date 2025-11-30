@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * A small composable that shows the Cast button and handles opening the Cast dialog when available.
+ */
+
 import android.content.Context
 import android.view.View
 import android.widget.ImageButton

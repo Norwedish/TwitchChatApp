@@ -1,5 +1,10 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Centralized manager for user session/state: stores access tokens, current user, and persistence.
+ * Used across app components to read or update authentication state.
+ */
+
 import android.content.Context
 import android.content.Intent
 import androidx.compose.runtime.getValue

@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Utility functions to parse emote indices and tokenization helpers for message rendering.
+ */
+
 // Renamed to avoid conflict and clarify its purpose
 data class ParsedTwitchEmote(
     val id: String,

@@ -1,5 +1,10 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * App entry point Activity which hosts the Compose navigation graph.
+ * Responsible for wiring top-level UI, handling deep links, and managing Cast initialization.
+ */
+
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
@@ -94,6 +99,9 @@ import java.util.concurrent.TimeUnit
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import java.util.Locale
 
+/**
+ * Simple object that centralizes route names used by the app's NavHost.
+ */
 object AppRoutes {
     const val LOGIN = "login"
     const val MAIN = "main"
@@ -108,6 +116,10 @@ object AppRoutes {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
+/**
+ * The Activity that starts the Compose UI, registers background receivers, and schedules periodic work.
+ * It wires up navigation and handles permission requests and lifecycle events for global app concerns.
+ */
 class MainActivity : AppCompatActivity() {
     private val mainViewModel: MainViewModel by viewModels()
 
@@ -295,6 +307,10 @@ class MainActivity : AppCompatActivity() {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
+/**
+ * The main screen composable that aggregates the home UI: stream list, app bar and navigation actions.
+ * It obtains state from the provided MainViewModel and exposes callbacks for navigation and actions.
+ */
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,

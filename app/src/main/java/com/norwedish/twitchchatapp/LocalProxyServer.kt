@@ -1,5 +1,10 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Local HTTP proxy used to rewrite Twitch HLS playlists so receivers (Cast) can access segments via LAN.
+ * This module implements a tiny embedded server and playlist/segment rewrites.
+ */
+
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

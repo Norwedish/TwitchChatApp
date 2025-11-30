@@ -1,7 +1,7 @@
 package com.norwedish.twitchchatapp
 
 import android.util.Log
-import io.ktor.client.* 
+import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.websocket.WebSockets

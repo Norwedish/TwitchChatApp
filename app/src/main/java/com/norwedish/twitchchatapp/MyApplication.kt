@@ -1,5 +1,14 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Custom Application class where global init (UserManager, CastManager) occurs.
+ *
+ * Responsibilities:
+ * - Initialize UserManager and other global singletons
+ * - Create notification channels used by background services
+ * - Provide a Coil ImageLoader with memory and disk caching for the app
+ */
+
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager

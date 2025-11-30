@@ -1,5 +1,10 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * ViewModel handling search queries and presenting search results to the UI.
+ * Wraps Twitch API search endpoints and exposes observable state for the SearchScreen.
+ */
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job

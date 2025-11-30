@@ -1,5 +1,14 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * ViewModel for the main/home screen. Loads followed streams, enriches with user info and exposes state
+ * for the `MainScreen` composable.
+ *
+ * - EnrichedStream combines stream metadata with the streamer's user profile for easier UI rendering.
+ * - MainViewModel exposes followedStreams and loading state and is responsible for fetching and
+ *   combining Twitch API data into UI-ready models.
+ */
+
 import android.app.Application
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf

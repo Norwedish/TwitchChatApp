@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Centralized parser for raw IRC messages from Twitch chat. Produces ChatMessage objects consumed by UI.
+ */
+
 object ChatMessageParser {
     // Expose a pure function that parses raw IRC chat lines into ChatMessage objects.
     // This is pure Kotlin and has no Android dependencies so it can be unit tested on the JVM.

@@ -1,5 +1,10 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * ViewModel for the whisper (private message) subsystem.
+ * Manages conversations, unread counts and integrates with the WhisperService.
+ */
+
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope

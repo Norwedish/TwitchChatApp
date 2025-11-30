@@ -1,5 +1,13 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Background service that manages the IRC/Twitch chat connection for a channel.
+ * Responsibilities:
+ *  - Connect to Twitch IRC for a channel and maintain reconnection logic
+ *  - Parse incoming messages and emit them to bound ViewModels
+ *  - Persist minimal state and handle NOTICE/room-state messages
+ */
+
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -37,6 +45,7 @@ import kotlinx.serialization.json.Json
 import java.text.SimpleDateFormat
 import java.util.*
 
+// Connection lifecycle states observed by clients
 enum class ConnectionState {
     DISCONNECTED,
     CONNECTING,
@@ -44,6 +53,7 @@ enum class ConnectionState {
     ERROR
 }
 
+// Message types used for rendering and handling special cases
 enum class MessageType {
     STANDARD,
     SUBSCRIPTION,
@@ -53,12 +63,14 @@ enum class MessageType {
     DELETED
 }
 
+// Lightweight holder for raw emote index info parsed from IRC tags
 data class TwitchEmoteInfo(
     val id: String,
     val startIndex: Int,
     val endIndex: Int,
 )
 
+// Chat message model emitted by the service for UI consumption
 data class ChatMessage(
     val id: String = java.util.UUID.randomUUID().toString(),
     val author: String?,
@@ -75,6 +87,7 @@ data class ChatMessage(
     val replyParentMsgBody: String? = null
 )
 
+// Room state emitted by the service (emote-only, slow-mode, etc.)
 data class RoomState(
     val emoteOnly: Boolean = false,
     val followersOnly: Int? = null, // Minutes
@@ -617,3 +630,4 @@ class ChatService : Service() {
         }
     }
 }
+

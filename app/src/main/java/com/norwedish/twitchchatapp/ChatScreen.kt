@@ -1,5 +1,12 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * UI level composables for displaying chat and related screens (chat messages, chatter list,
+ * input bar, emote grid, and casting integration).
+ *
+ * This file contains composables and helper UI types used by the chat screen.
+ */
+
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -78,6 +85,10 @@ data class UrlToken(val url: String) : MessageToken()
 
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalMaterialApi::class, androidx.compose.ui.text.ExperimentalTextApi::class)
+/**
+ * Primary composable that shows a chat for a given channel. Manages cast listeners, binds to the
+ * ChatService and observes ChatViewModel state to render messages and input controls.
+ */
 @Composable
 fun ChatScreen(
     channelName: String,

@@ -1,5 +1,11 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Background service that handles whisper (private message) transport, persistence and delivery.
+ * Exposes flows for incoming messages and implements sending via Twitch endpoints.
+ */
+
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -88,6 +94,7 @@ class WhisperService : Service() {
     // Auth BroadcastReceiver
     private var authBroadcastReceiver: android.content.BroadcastReceiver? = null
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -112,7 +119,8 @@ class WhisperService : Service() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(authBroadcastReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
-            registerReceiver(authBroadcastReceiver, filter)
+            // Use the older 4-arg overload with null permission/handler to avoid lint complaints about export flags
+            registerReceiver(authBroadcastReceiver, filter, null, null)
         }
     }
 

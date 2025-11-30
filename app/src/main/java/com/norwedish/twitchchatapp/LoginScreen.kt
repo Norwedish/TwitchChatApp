@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Login UI composable that triggers the OAuth flow and returns the token on success via callback.
+ */
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -43,4 +47,3 @@ fun LoginScreen(
         }
     }
 }
-    

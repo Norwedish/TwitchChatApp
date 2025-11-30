@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp.ui.theme
 
+/**
+ * App theme definitions and top-level Theme composable used by the app to apply Material theming.
+ */
+
 import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme

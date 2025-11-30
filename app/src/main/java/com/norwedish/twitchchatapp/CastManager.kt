@@ -1,5 +1,9 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * Helper to coordinate Google Cast session lifecycle and provide a simple API to start casting.
+ */
+
 import android.content.Context
 import android.util.Log
 import androidx.core.net.toUri
@@ -279,6 +283,16 @@ object CastManager {
                             val clazz = remoteMediaClient.javaClass
                             val methodNames = clazz.methods.map { it.name }.sorted().distinct()
                             Log.d(TAG, "RemoteMediaClient methods: ${methodNames.joinToString(",")}")
+
+                            // Check for common player state methods
+                            val playerStateMethods = listOf("getPlayerState", "isPlaying", "getMediaStatus")
+                            for (methodName in playerStateMethods) {
+                                try {
+                                    val m = clazz.getMethod(methodName)
+                                    val res = m.invoke(remoteMediaClient)
+                                    Log.d(TAG, "$methodName() => $res")
+                                } catch (_: NoSuchMethodException) {}
+                            }
                         } catch (e: Exception) {
                             Log.w(TAG, "Diagnostic reflection failed: ${e.message}")
                         } finally {

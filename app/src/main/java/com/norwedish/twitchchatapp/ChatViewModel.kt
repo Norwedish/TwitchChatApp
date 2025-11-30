@@ -1,5 +1,14 @@
 package com.norwedish.twitchchatapp
 
+/**
+ * ViewModel that manages chat state for a single channel.
+ *
+ * Responsibilities include:
+ * - Maintaining the list of messages and UI state (input, emote menu, selected user, etc.)
+ * - Managing background collection jobs that synchronize with ChatService
+ * - Exposing flows and state for the UI to observe
+ */
+
 import android.util.Log
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
