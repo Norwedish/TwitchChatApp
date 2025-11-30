@@ -55,7 +55,7 @@ The app requires Twitch API credentials to call certain endpoints and to perform
 1. Go to the Twitch Developer Console: https://dev.twitch.tv/console
 2. Create a new application.
    - Name: (your app name)
-   - OAuth Redirect URI: add the redirect URI your app uses. For native/mobile apps, this is often a custom scheme (e.g. `twitchchatapp://callback`) or `http://localhost` for testing — match the app's implementation.
+   - OAuth Redirect URI: add the redirect URI your app uses. For native/mobile apps, this is often a custom scheme (e.g. `twitchchatapp://callback`) or `http://localhost` for testing — match the app's implementation. Which is in this case http://localhost:3000 .
    - Category: Application Integration or whatever fits.
 3. After creating the application you'll get a Client ID and a Client Secret. Keep these values private.
 
@@ -72,7 +72,6 @@ Recommended secure options:
 ```properties
 # local.properties (local only) - DO NOT commit
 TWITCH_CLIENT_ID=your_client_id_here
-TWITCH_CLIENT_SECRET=your_client_secret_here
 ```
 
 - In your app's `build.gradle` or code, read them from `local.properties`. Example Gradle snippet (Kotlin DSL):
@@ -83,20 +82,18 @@ val localProps = java.util.Properties().apply {
     rootProject.file("local.properties").inputStream().use { load(it) }
 }
 val twitchClientId: String? = localProps.getProperty("TWITCH_CLIENT_ID")
-val twitchClientSecret: String? = localProps.getProperty("TWITCH_CLIENT_SECRET")
 
 android {
     defaultConfig {
         // ...
         buildConfigField("String", "TWITCH_CLIENT_ID", "\"${twitchClientId}\"")
-        buildConfigField("String", "TWITCH_CLIENT_SECRET", "\"${twitchClientSecret}\"")
     }
 }
 ```
 
 2) Use environment variables (CI-friendly):
 
-- Set environment variables TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET on your machine or CI and read them in Gradle or at runtime.
+- Set environment variables TWITCH_CLIENT_ID on your machine or CI and read them in Gradle or at runtime.
 
 3) Use Android AccountManager / Encrypted SharedPreferences for runtime tokens.
 
