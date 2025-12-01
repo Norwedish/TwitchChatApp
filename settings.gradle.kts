@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "TwitchChatApp"
+rootProject.name = "TwitcherChat"
 include(":app")

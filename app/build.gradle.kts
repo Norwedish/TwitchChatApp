@@ -15,7 +15,7 @@ if (localPropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.norwedish.twitchchatapp"
+    namespace = "com.norwedish.twitcherchat"
     compileSdk = 36
 
     packaging {
@@ -26,7 +26,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.norwedish.twitchchatapp"
+        applicationId = "com.norwedish.twitcherchat"
         minSdk = 28
         targetSdk = 36
         versionCode = 1

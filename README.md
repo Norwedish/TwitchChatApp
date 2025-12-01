@@ -1,4 +1,4 @@
-# TwitchChatApp
+# Twitcher Chat
 
 A lightweight Android app for viewing and participating in Twitch chat for your followed streamers.
 
@@ -26,7 +26,7 @@ This repository contains the Android Studio project used to build the app. The R
 
 ## Project overview
 
-TwitchChatApp is an Android application that connects to Twitch and allows you to read and participate in chat for streamers you follow. It demonstrates integrating with the Twitch API and chat (IRC or PubSub) and typical Android UI patterns.
+Twitcher Chat is an Android application that connects to Twitch and allows you to read and participate in chat for streamers you follow. It demonstrates integrating with the Twitch API and chat (IRC or PubSub) and typical Android UI patterns.
 
 Notes and assumptions
 - I inferred the project's purpose (Twitch chat client) from the repository name and the small README. If any feature descriptions below are inaccurate, tell me which parts to update.
@@ -55,7 +55,7 @@ The app requires Twitch API credentials to call certain endpoints and to perform
 1. Go to the Twitch Developer Console: https://dev.twitch.tv/console
 2. Create a new application.
    - Name: (your app name)
-   - OAuth Redirect URI: add the redirect URI your app uses. For native/mobile apps, this is often a custom scheme (e.g. `twitchchatapp://callback`) or `http://localhost` for testing — match the app's implementation. Which is in this case http://localhost:3000 .
+   - OAuth Redirect URI: add the redirect URI your app uses. For native/mobile apps, this is often a custom scheme (e.g. `twitcherchat://callback`) or `http://localhost` for testing — match the app's implementation. Which is in this case http://localhost:3000 .
    - Category: Application Integration or whatever fits.
 3. After creating the application you'll get a Client ID and a Client Secret. Keep these values private.
 
