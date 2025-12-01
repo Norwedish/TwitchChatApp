@@ -36,6 +36,9 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import io.ktor.client.statement.HttpResponse
@@ -372,20 +375,84 @@ class WhisperService : Service() {
                     val subType = msg.payload.subscription?.type
                     if (subType != null && subType == WHISPER_EVENTSUB_TYPE) {
                         try {
-                            val payloadObj = eventSubJson.decodeFromString(WhisperEventSubPayload.serializer(), text)
-                            val ev = payloadObj.event
-                            val whisperMessage = WhisperMessage(
-                                id = ev.whisperId,
-                                fromUserId = ev.fromUserId,
-                                fromUserLogin = ev.fromUserLogin,
-                                fromDisplayName = ev.fromUserName,
-                                fromProfileImageUrl = "",
-                                toUserId = ev.toUserId,
-                                toUserLogin = ev.toUserLogin,
-                                message = ev.text,
-                                isOutgoing = false
-                            )
-                            serviceScope.launch { _incomingWhispers.emit(whisperMessage) }
+                            // The incoming WebSocket wrapper has the shape EventSubMessage -> payload -> event.
+                            // We already parsed the wrapper into `msg` above. The `payload.event` can be a
+                            // different concrete JSON shape depending on the subscription type, so we
+                            // decode the event JsonElement directly into our `WhisperEvent` model.
+                            val eventElement = msg.payload.event
+                            if (eventElement == null) throw IllegalStateException("Event element missing in payload")
+                            try {
+                                // Preferred path: decode directly to WhisperEvent
+                                val ev = eventSubJson.decodeFromJsonElement(WhisperEvent.serializer(), eventElement)
+                                val whisperMessage = WhisperMessage(
+                                    id = ev.whisperId,
+                                    fromUserId = ev.fromUserId,
+                                    fromUserLogin = ev.fromUserLogin,
+                                    fromDisplayName = ev.fromUserName,
+                                    fromProfileImageUrl = "",
+                                    toUserId = ev.toUserId,
+                                    toUserLogin = ev.toUserLogin,
+                                    message = ev.text,
+                                    isOutgoing = false
+                                )
+                                serviceScope.launch { _incomingWhispers.emit(whisperMessage) }
+                            } catch (primaryEx: Exception) {
+                                // If structured deserialization fails (e.g., missing `text`), attempt a tolerant manual parse.
+                                try {
+                                    Log.w("WhisperService", "WhisperEvent deserialization failed: ${primaryEx.message}; attempting tolerant parse")
+                                    val obj = eventElement.jsonObject
+
+                                    // Helper: try a list of possible keys and return the first primitive content found
+                                    fun v(vararg keys: String): String? {
+                                        for (k in keys) {
+                                            val el = obj[k]
+                                            if (el is kotlinx.serialization.json.JsonPrimitive) {
+                                                try { return el.content } catch (_: Exception) { /* fallthrough */ }
+                                            }
+                                        }
+                                        return null
+                                    }
+
+                                    val fromUserId = v("from_user_id", "from_id", "fromId")
+                                    val fromUserLogin = v("from_user_login", "from_login", "fromUserLogin")
+                                    val fromUserName = v("from_user_name", "from_name", "display_name", "fromUserName")
+                                    val toUserId = v("to_user_id", "to_id", "toUserId")
+                                    val toUserLogin = v("to_user_login", "to_login", "toUserLogin")
+                                    val whisperId = v("whisper_id", "id", "whisperId") ?: java.util.UUID.randomUUID().toString()
+
+                                    // Try several likely keys for the message content, including nested message objects.
+                                    var text: String? = v("text", "message", "message_text", "message_body")
+                                    if (text.isNullOrBlank()) {
+                                        val messageObjEl = obj["message"]
+                                        val messageObj = if (messageObjEl is kotlinx.serialization.json.JsonObject) messageObjEl else null
+                                        text = messageObj?.let { mo ->
+                                            val t = mo["text"]
+                                            if (t is kotlinx.serialization.json.JsonPrimitive) return@let try { t.content } catch (_: Exception) { null }
+                                            val b = mo["body"]
+                                            if (b is kotlinx.serialization.json.JsonPrimitive) return@let try { b.content } catch (_: Exception) { null }
+                                            val m = mo["message"]
+                                            if (m is kotlinx.serialization.json.JsonPrimitive) return@let try { m.content } catch (_: Exception) { null }
+                                            null
+                                        }
+                                    }
+
+                                    val whisperMessage = WhisperMessage(
+                                        id = whisperId,
+                                        fromUserId = fromUserId ?: "",
+                                        fromUserLogin = fromUserLogin ?: "",
+                                        fromDisplayName = fromUserName ?: fromUserLogin ?: "",
+                                        fromProfileImageUrl = "",
+                                        toUserId = toUserId ?: (UserManager.currentUser?.id ?: ""),
+                                        toUserLogin = toUserLogin ?: (UserManager.currentUser?.login ?: ""),
+                                        message = text ?: "",
+                                        isOutgoing = false
+                                    )
+                                    Log.d("WhisperService", "Tolerant whisper parse succeeded: $whisperMessage")
+                                    serviceScope.launch { _incomingWhispers.emit(whisperMessage) }
+                                } catch (fallbackEx: Exception) {
+                                    Log.e("WhisperService", "Failed to decode whisper payload (tolerant fallback also failed). Raw event: $eventElement", fallbackEx)
+                                }
+                            }
                         } catch (e: Exception) {
                             Log.e("WhisperService", "Failed to decode whisper payload", e)
                         }

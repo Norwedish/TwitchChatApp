@@ -7,6 +7,7 @@ package com.norwedish.twitcherchat
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 // --- WebSocket Message Models ---
 
@@ -29,7 +30,9 @@ data class MessageMetadata(
 data class MessagePayload(
     val session: SessionData? = null,
     val subscription: EventSubSubscriptionData? = null,
-    val event: EventData? = null
+    // Event can have different shapes depending on subscription type (e.g. whisper events vs stream events).
+    // Use JsonElement to avoid failing deserialization when the concrete shape doesn't match EventData.
+    val event: JsonElement? = null
 )
 
 @Serializable

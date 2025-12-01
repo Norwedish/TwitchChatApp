@@ -85,19 +85,12 @@ data class WhisperTransport(
 @Serializable
 data class WhisperEvent(
     @SerialName("from_user_id")
-    val fromUserId: String,
-    @SerialName("from_user_login")
-    val fromUserLogin: String,
-    @SerialName("from_user_name")
-    val fromUserName: String,
-    @SerialName("to_user_id")
-    val toUserId: String,
-    @SerialName("to_user_login")
-    val toUserLogin: String,
-    @SerialName("to_user_name")
-    val toUserName: String,
-    @SerialName("whisper_id")
-    val whisperId: String,
-    @SerialName("text")
-    val text: String
+    val fromUserId: String = "",
+    @SerialName("from_user_login") val fromUserLogin: String = "",
+    @SerialName("from_user_name") val fromUserName: String = "",
+    @SerialName("to_user_id") val toUserId: String = "",
+    @SerialName("to_user_login") val toUserLogin: String = "",
+    @SerialName("to_user_name") val toUserName: String = "",
+    @SerialName("whisper_id") val whisperId: String = "",
+    @SerialName("text") val text: String = ""
 )
