@@ -66,7 +66,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -99,8 +98,6 @@ fun ChatScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val whisperViewModel: WhisperViewModel = viewModel()
-    var showWhisperScreen by remember { mutableStateOf(false) }
     var showCastDialog by remember { mutableStateOf(false) } // state for cast dialog
 
     // Read the streamTitle from the ViewModel early so listeners can reference it
@@ -192,46 +189,26 @@ fun ChatScreen(
         }
     }
 
-    // Helper functions to clear local UI state - read the value first to avoid analyzer "assigned value is never read" warnings
-    fun closeWhisperScreen() {
-        // Read current value and only clear if true
-        if (showWhisperScreen) showWhisperScreen = false
+    // Tell the ViewModel which channel is active so it can start polling stream metadata (title/viewerCount)
+    DisposableEffect(key1 = twitchUserId, key2 = channelName) {
+        try {
+            viewModel.setCurrentChannel(twitchUserId, channelName)
+        } catch (_: Exception) {}
+        onDispose {
+            try {
+                // Clear the current channel to stop polling
+                viewModel.setCurrentChannel("", "")
+            } catch (_: Exception) {}
+        }
     }
 
+    // Helper functions to clear local UI state - read the value first to avoid analyzer "assigned value is never read" warnings
     fun closeCastDialog() {
         if (showCastDialog) showCastDialog = false
     }
 
     // Initialize whisper view model and service
     DisposableEffect(Unit) {
-        val prefManager = WhisperPreferenceManager(context)
-        val currentUser = UserManager.currentUser
-        if (currentUser != null) {
-            whisperViewModel.initialize(prefManager, currentUser.id, currentUser.login)
-        }
-
-        val whisperServiceIntent = Intent(context, WhisperService::class.java)
-        context.startService(whisperServiceIntent)
-
-        val whisperServiceConnection = object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                val binder = service as WhisperService.WhisperBinder
-                whisperViewModel.setWhisperService(binder.getService())
-            }
-
-            override fun onServiceDisconnected(name: ComponentName?) {}
-        }
-
-        context.bindService(whisperServiceIntent, whisperServiceConnection, Context.BIND_AUTO_CREATE)
-
-        onDispose {
-            context.unbindService(whisperServiceConnection)
-        }
-    }
-
-    DisposableEffect(channelName, twitchUserId) {
-        viewModel.prepareForChannel(channelName, twitchUserId)
-
         val serviceIntent = Intent(context, ChatService::class.java).apply {
             putExtra("channelName", channelName)
             putExtra("twitchUserId", twitchUserId)
@@ -307,16 +284,7 @@ fun ChatScreen(
         UserInfoDialog(
             user = selectedUserForProfile!!,
             messages = userMessages,
-            onDismiss = { viewModel.onDismissUserProfile() },
-            onSendWhisper = { userLogin ->
-                whisperViewModel.startNewConversation(
-                    userLogin = userLogin,
-                    displayName = selectedUserForProfile?.author ?: userLogin,
-                    profileImageUrl = selectedUserForProfile?.tags?.get("profile-image-url") ?: ""
-                )
-                showWhisperScreen = true
-                viewModel.onDismissUserProfile()
-            }
+            onDismiss = { viewModel.onDismissUserProfile() }
         )
     }
 
@@ -466,40 +434,18 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    val totalUnreadWhispers by whisperViewModel.totalUnreadCount.collectAsState()
-
                     // Chromecast / Cast button - show native MediaRouteButton when available
                     CastButton(modifier = Modifier.size(36.dp))
-                    IconButton(onClick = {
-                        // Open the full whisper screen directly
-                        showWhisperScreen = true
-                    }) {
-                        Box {
-                            Icon(Icons.Default.ChatBubble, contentDescription = "Messages")
-                            if (totalUnreadWhispers > 0) {
-                                Badge(
-                                    modifier = Modifier.align(Alignment.TopEnd),
-                                    containerColor = MaterialTheme.colorScheme.error
-                                ) {
-                                    Text(
-                                        totalUnreadWhispers.toString(),
-                                        color = MaterialTheme.colorScheme.onError,
-                                        fontSize = 10.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            )
-        }
+                 }
+            ) // end TopAppBar
+        } // end topBar lambda
     ) { paddingValues ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .navigationBarsPadding()
-                .imePadding()
+         Column(
+             Modifier
+                 .fillMaxSize()
+                 .padding(paddingValues)
+                 .navigationBarsPadding()
+                 .imePadding()
         ) {
             poll?.let {
                 PollCard(poll = it, onVote = { pollId, choiceId ->
@@ -760,14 +706,6 @@ fun ChatScreen(
                 }
             }
         }
-    }
-
-    // Whisper Screen (full screen view)
-    if (showWhisperScreen) {
-        WhisperScreen(
-            viewModel = whisperViewModel,
-            onNavigateBack = { closeWhisperScreen() }
-        )
     }
 
     // Chromecast / Cast dialog - safe fallback to open the stream in a browser
@@ -1291,11 +1229,11 @@ fun ChatterListScreen(
 fun UserInfoDialog(
     user: ChatMessage,
     messages: List<ChatMessage>,
-    onDismiss: () -> Unit,
-    onSendWhisper: (String) -> Unit = {}
+    onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        confirmButton = { /* no-op confirm button to satisfy Material3 overload */ },
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AsyncImage(
@@ -1321,13 +1259,6 @@ fun UserInfoDialog(
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                 }
-            }
-        },
-        confirmButton = {
-            Button(onClick = {
-                user.authorLogin?.let { onSendWhisper(it) }
-            }) {
-                Text("Send Whisper")
             }
         },
         dismissButton = {

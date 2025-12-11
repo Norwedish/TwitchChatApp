@@ -3,6 +3,7 @@ package com.norwedish.twitcherchat
 import android.util.Log
 import io.ktor.client.*
 import io.ktor.client.call.*
+import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.request.*
@@ -13,8 +14,9 @@ import io.ktor.client.plugins.ClientRequestException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.json.*
 
-// --- Data Classes ---
+// --- Data Classes (top-level so other modules can reference them) ---
 
 @Serializable
 data class TwitchUser(
@@ -127,9 +129,8 @@ data class PlaybackAccessToken(
     val signature: String
 )
 
-// --- CHATTER LIST DATA CLASSES --- //
+// --- CHATTER LIST DATA CLASSES (top-level) ---
 
-// FOR HELIX (NEW API)
 @Serializable
 data class HelixChattersResponse(
     val data: List<Chatter>? = null, // Nullable for safety
@@ -174,59 +175,26 @@ private data class UserFollow(
     @SerialName("followed_at") val followedAt: String
 )
 
+@Serializable
+data class HelixChattersGrouped(
+    val broadcaster: List<Chatter> = emptyList(),
+    val moderators: List<Chatter> = emptyList(),
+    val vips: List<Chatter> = emptyList(),
+    val viewers: List<Chatter> = emptyList()
+)
+
+// --- API object exposing functions ---
 object TwitchApi {
 
-    private val client = HttpClient {
+    // Shared Ktor client used by the API helpers
+    private val client = HttpClient(CIO) {
         install(ContentNegotiation) {
             json(Json {
                 ignoreUnknownKeys = true
+                isLenient = true
             })
         }
         install(WebSockets)
-    }
-
-    suspend fun getFollowRelationship(userId: String, broadcasterId: String, token: String, clientId: String): FollowedChannel? {
-        if (userId.isBlank() || broadcasterId.isBlank()) return null
-        return try {
-            // The older /helix/channels/followed endpoint has been removed (returned 410).
-            // Use GET /helix/users/follows with from_id and to_id and map the result into FollowedChannel.
-            val response: UsersFollowsResponse = client.get("https://api.twitch.tv/helix/users/follows") {
-                url {
-                    parameters.append("from_id", userId)
-                    parameters.append("to_id", broadcasterId)
-                }
-                headers {
-                    header("Client-Id", clientId)
-                    header("Authorization", "Bearer $token")
-                }
-            }.body()
-
-            val first = response.data?.firstOrNull()
-            first?.let {
-                FollowedChannel(
-                    broadcasterId = it.toId,
-                    broadcasterLogin = it.toLogin ?: "",
-                    broadcasterName = it.toName ?: "",
-                    followedAt = it.followedAt
-                )
-            }
-        } catch (e: ClientRequestException) {
-            // ClientRequestException can wrap non-2xx responses; check for 410 Gone specifically
-            try {
-                val status = (e.response.status)
-                if (status == HttpStatusCode.Gone) {
-                    Log.e("TwitchApi", "Endpoint returned 410 Gone - endpoint may have been removed or requires different scopes. Returning null.")
-                    return null
-                }
-            } catch (_: Exception) {
-                // ignore and fall through to generic error logging
-            }
-            Log.e("TwitchApi", "Error fetching follow relationship: ${e.message}", e)
-            null
-        } catch (e: Exception) {
-            Log.e("TwitchApi", "Error fetching follow relationship: ${e.message}", e)
-            null
-        }
     }
 
     // Returns true if the user is subscribed to the broadcaster, false if not, or null if unknown/error.
@@ -273,8 +241,14 @@ object TwitchApi {
                     }
                 }
             }"""
+
             val response: PlaybackAccessTokenResponse = client.post("https://gql.twitch.tv/gql") {
                 header("Client-ID", gqlClientId)
+                // If we have a logged-in user's OAuth token, include it so Twitch can return a playback
+                // token that reflects subscriber status / ad-free eligibility for that user.
+                UserManager.accessToken?.let { auth ->
+                    header("Authorization", "Bearer $auth")
+                }
                 contentType(ContentType.Application.Json)
                 setBody(gqlRequest)
             }.body()
@@ -297,7 +271,7 @@ object TwitchApi {
         }
     }
 
-    suspend fun getHelixChatters(broadcasterId: String, moderatorId: String, token: String, clientId: String): List<Chatter>? {
+    suspend fun getHelixChatters(broadcasterId: String, moderatorId: String, token: String, clientId: String): HelixChattersGrouped? {
         return try {
             val response = client.get("https://api.twitch.tv/helix/chat/chatters") {
                 url {
@@ -310,12 +284,106 @@ object TwitchApi {
                     append("Client-Id", clientId)
                 }
             }
-            if (response.status.isSuccess()) {
-                response.body<HelixChattersResponse>().data
-            } else {
+
+            if (!response.status.isSuccess()) {
                 Log.w("TwitchApi", "Failed to get Helix chatters, status: ${response.status}")
-                null // Return null on failure (e.g., 403 Forbidden)
+                return null
             }
+
+            val text = response.bodyAsText()
+            val json = Json { ignoreUnknownKeys = true }
+            val root = try {
+                json.parseToJsonElement(text)
+            } catch (e: Exception) {
+                Log.e("TwitchApi", "Failed to parse Helix chatters response JSON", e)
+                return null
+            }
+
+            val broadcasterList = mutableListOf<Chatter>()
+            val modsList = mutableListOf<Chatter>()
+            val vipsList = mutableListOf<Chatter>()
+            val viewersList = mutableListOf<Chatter>()
+
+            fun parseChatterFromElement(el: JsonElement): Chatter? {
+                if (el !is JsonObject) return null
+                val obj = el
+                val userLogin = obj["user_login"]?.jsonPrimitive?.contentOrNull
+                    ?: obj["login"]?.jsonPrimitive?.contentOrNull
+                    ?: ""
+                val userName = obj["user_name"]?.jsonPrimitive?.contentOrNull
+                    ?: obj["user_display_name"]?.jsonPrimitive?.contentOrNull
+                    ?: obj["display_name"]?.jsonPrimitive?.contentOrNull
+                    ?: userLogin
+                val userId = obj["user_id"]?.jsonPrimitive?.contentOrNull ?: obj["id"]?.jsonPrimitive?.contentOrNull ?: ""
+                return Chatter(userLogin, userName, userId)
+            }
+
+            // The Helix response may present data as an array or as an object with role keys. Handle both.
+            val dataElement = when {
+                root is JsonObject && root.containsKey("data") -> root["data"]
+                else -> root
+            }
+
+            if (dataElement is JsonArray) {
+                // Flat array: each element may have a type/role field
+                dataElement.forEach { el ->
+                    if (el !is JsonObject) return@forEach
+                    val role = el["type"]?.jsonPrimitive?.contentOrNull
+                        ?: el["role"]?.jsonPrimitive?.contentOrNull
+                    val chatter = parseChatterFromElement(el) ?: return@forEach
+                    when (role?.lowercase()) {
+                        "broadcaster" -> broadcasterList.add(chatter)
+                        "moderator", "mod" -> modsList.add(chatter)
+                        "vip" -> vipsList.add(chatter)
+                        else -> viewersList.add(chatter)
+                    }
+                }
+            } else if (dataElement is JsonObject) {
+                // Might be shaped like: { data: { broadcaster: [...], moderator: [...], vip: [...], viewer: [...] } }
+                dataElement.jsonObject.forEach { (key, value) ->
+                    if (value is JsonArray) {
+                        value.forEach { el ->
+                            val chatter = parseChatterFromElement(el) ?: return@forEach
+                            when (key.lowercase()) {
+                                "broadcaster", "broadcasters" -> broadcasterList.add(chatter)
+                                "moderator", "moderators", "mods" -> modsList.add(chatter)
+                                "vip", "vips" -> vipsList.add(chatter)
+                                "viewer", "viewers" -> viewersList.add(chatter)
+                                else -> viewersList.add(chatter)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // As a fallback, if broadcaster list is empty try to find the broadcaster among all lists by matching id
+            if (broadcasterList.isEmpty()) {
+                val all = (modsList + vipsList + viewersList).toMutableList()
+                val found = all.firstOrNull { it.userId.isNotBlank() && it.userId == broadcasterId }
+                found?.let {
+                    // remove from its previous list
+                    modsList.removeIf { c -> c.userId == it.userId }
+                    vipsList.removeIf { c -> c.userId == it.userId }
+                    viewersList.removeIf { c -> c.userId == it.userId }
+                    broadcasterList.add(it)
+                }
+            }
+
+            // Sort each list by display/user name case-insensitively
+            fun sortChatters(list: MutableList<Chatter>) = list.sortWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.userName })
+
+            sortChatters(broadcasterList)
+            sortChatters(modsList)
+            sortChatters(vipsList)
+            sortChatters(viewersList)
+
+            HelixChattersGrouped(
+                broadcaster = broadcasterList,
+                moderators = modsList,
+                vips = vipsList,
+                viewers = viewersList
+            )
+
         } catch (e: Exception) {
             Log.e("TwitchApi", "Exception getting Helix chatters for $broadcasterId", e)
             null
@@ -542,4 +610,5 @@ object TwitchApi {
         }
         return result
     }
+
 }

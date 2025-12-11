@@ -29,7 +29,7 @@ class AuthViewModel : ViewModel() {
                 "?response_type=token" + // Vraagt een token direct in de URL fragment (#)
                 "&client_id=$clientId" +
                 "&redirect_uri=$redirectUri" +
-                "&scope=chat:read chat:edit user:read:follows user:edit:follows channel:read:polls user:read:broadcast moderation:read channel:read:vips moderator:read:chatters user:manage:whispers"
+                "&scope=chat:read chat:edit user:read:follows user:edit:follows channel:read:polls user:read:broadcast moderation:read channel:read:vips moderator:read:chatters"
 
         // 3. Open de URL in een Custom Tab (externe browser)
         val builder = CustomTabsIntent.Builder()

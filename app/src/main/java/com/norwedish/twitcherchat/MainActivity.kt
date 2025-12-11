@@ -325,37 +325,6 @@ fun MainScreen(
     val currentUser = UserManager.currentUser
     var menuExpanded by remember { mutableStateOf(false) }
 
-    // Whisper system integration
-    val whisperViewModel: WhisperViewModel = viewModel()
-    var showWhisperScreen by remember { mutableStateOf(false) }
-
-    // Initialize whisper view model and service
-    DisposableEffect(Unit) {
-        val prefManager = WhisperPreferenceManager(context)
-        val user = UserManager.currentUser
-        if (user != null) {
-            whisperViewModel.initialize(prefManager, user.id, user.login)
-        }
-
-        val whisperServiceIntent = Intent(context, WhisperService::class.java)
-        context.startService(whisperServiceIntent)
-
-        val whisperServiceConnection = object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                val binder = service as WhisperService.WhisperBinder
-                whisperViewModel.setWhisperService(binder.getService())
-            }
-
-            override fun onServiceDisconnected(name: ComponentName?) {}
-        }
-
-        context.bindService(whisperServiceIntent, whisperServiceConnection, Context.BIND_AUTO_CREATE)
-
-        onDispose {
-            context.unbindService(whisperServiceConnection)
-        }
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -401,27 +370,6 @@ fun MainScreen(
                     }
                 },
                 actions = {
-                    val totalUnreadWhispers by whisperViewModel.totalUnreadCount.collectAsState()
-                    IconButton(onClick = {
-                        // Open the full whisper screen directly
-                        showWhisperScreen = true
-                    }) {
-                        Box {
-                            Icon(Icons.Default.ChatBubble, contentDescription = "Messages")
-                            if (totalUnreadWhispers > 0) {
-                                Badge(
-                                    modifier = Modifier.align(Alignment.TopEnd),
-                                    containerColor = MaterialTheme.colorScheme.error
-                                ) {
-                                    Text(
-                                        totalUnreadWhispers.toString(),
-                                        color = MaterialTheme.colorScheme.onError,
-                                        fontSize = 10.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
                     IconButton(onClick = onSettingsClick) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
@@ -467,14 +415,6 @@ fun MainScreen(
                 }
             }
         }
-    }
-
-    // Whisper Screen (full screen view)
-    if (showWhisperScreen) {
-        WhisperScreen(
-            viewModel = whisperViewModel,
-            onNavigateBack = { showWhisperScreen = false }
-        )
     }
 }
 
