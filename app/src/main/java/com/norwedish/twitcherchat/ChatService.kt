@@ -228,6 +228,11 @@ class ChatService : Service() {
     private var connectionJob: Job? = null
     var currentChannel: String = ""
 
+    // Track whether we have successfully JOINed the current channel.
+    // Without join, Twitch will not accept PRIVMSG to that channel.
+    @Volatile
+    private var hasJoinedChannel: Boolean = false
+
     private val _poll = MutableStateFlow<Poll?>(null)
     val poll = _poll.asStateFlow()
 
@@ -313,6 +318,7 @@ class ChatService : Service() {
         }
 
         currentChannel = channelName
+        hasJoinedChannel = false
 
         connectionJob?.cancel()
         currentChatters.clear() // Clear chatters for the new channel
@@ -329,11 +335,16 @@ class ChatService : Service() {
                     path = ""
                 ) {
                     session = this
-                    send(Frame.Text("PASS oauth:$token"))
-                    send(Frame.Text("NICK $nick"))
-                    send(Frame.Text("CAP REQ :twitch.tv/membership"))
-                    send(Frame.Text("CAP REQ :twitch.tv/tags"))
-                    send(Frame.Text("CAP REQ :twitch.tv/commands"))
+
+                    // Twitch IRC expects CRLF-terminated commands.
+                    // Also normalize token to avoid accidentally sending oauth:oauth:...
+                    val normalizedToken = token.removePrefix("oauth:")
+
+                    sendIrc("PASS oauth:$normalizedToken")
+                    sendIrc("NICK $nick")
+                    sendIrc("CAP REQ :twitch.tv/membership")
+                    sendIrc("CAP REQ :twitch.tv/tags")
+                    sendIrc("CAP REQ :twitch.tv/commands")
 
                     listenToMessages(channelName)
                 }
@@ -344,6 +355,7 @@ class ChatService : Service() {
             } finally {
                 session?.close()
                 session = null
+                hasJoinedChannel = false
                 if (_connectionState.value != ConnectionState.ERROR) {
                     _connectionState.value = ConnectionState.DISCONNECTED
                 }
@@ -353,6 +365,7 @@ class ChatService : Service() {
 
     fun disconnect() {
         _isCurrentUserModerator.value = false // Reset mod status on disconnect
+        hasJoinedChannel = false
         connectionJob?.cancel()
         _poll.value = null // Clear the poll when disconnecting
         _roomState.value = null
@@ -360,29 +373,61 @@ class ChatService : Service() {
 
     fun sendMessage(channelName: String, message: String, replyToMessageId: String? = null) {
         val activeSession = session
-        if (activeSession?.isActive == true && message.isNotBlank()) {
+        val normalizedChannel = normalizeChannelName(channelName)
+        if (message.isBlank()) return
+
+        // If we aren't actually joined yet, don't pretend we sent.
+        if (!hasJoinedChannel || _connectionState.value != ConnectionState.CONNECTED || activeSession?.isActive != true) {
             serviceScope.launch {
-                try {
-                    val ircMessage = if (replyToMessageId != null) {
-                        "@reply-parent-msg-id=$replyToMessageId PRIVMSG #$channelName :$message"
-                    } else {
-                        "PRIVMSG #$channelName :$message"
-                    }
-                    activeSession.send(Frame.Text(ircMessage))
-                } catch (e: Exception) {
-                    // Handle error
+                _chatMessages.emit(
+                    ChatMessage(
+                        author = null,
+                        authorLogin = null,
+                        message = "Not connected to #$normalizedChannel yet — message wasn't sent.",
+                        authorColor = null,
+                        type = MessageType.SYSTEM,
+                        tags = mapOf("client" to "send_guard")
+                    )
+                )
+            }
+            return
+        }
+
+        serviceScope.launch {
+            try {
+                val ircMessage = if (replyToMessageId != null) {
+                    "@reply-parent-msg-id=$replyToMessageId PRIVMSG #$normalizedChannel :$message"
+                } else {
+                    "PRIVMSG #$normalizedChannel :$message"
+                }
+
+                // Always send CRLF terminated IRC command.
+                activeSession.sendIrc(ircMessage)
+            } catch (e: Exception) {
+                serviceScope.launch {
+                    _chatMessages.emit(
+                        ChatMessage(
+                            author = null,
+                            authorLogin = null,
+                            message = "Failed to send message: ${e.message ?: "unknown error"}",
+                            authorColor = null,
+                            type = MessageType.SYSTEM,
+                            tags = mapOf("client" to "send_error")
+                        )
+                    )
                 }
             }
         }
     }
 
     private suspend fun DefaultClientWebSocketSession.listenToMessages(channelName: String) {
+        val normalizedChannel = normalizeChannelName(channelName)
         for (frame in incoming) {
             if (frame is Frame.Text) {
                 val messageText = frame.readText().trim()
                 messageText.split("\r\n").forEach { rawMessage ->
                     if (rawMessage.startsWith("PING")) {
-                        send(Frame.Text("PONG :tmi.twitch.tv"))
+                        sendIrc("PONG :tmi.twitch.tv")
                         return@forEach
                     }
 
@@ -391,8 +436,19 @@ class ChatService : Service() {
 
                     if (rawMessage.contains(" 001 ")) { // Welcome message: authentication is successful
                         Log.d(TAG, "Authentication successful. Sending JOIN command.")
-                        send(Frame.Text("JOIN #$channelName"))
+                        hasJoinedChannel = false
+                        sendIrc("JOIN #$normalizedChannel")
+                        // We'll mark CONNECTED when we actually see that we joined / got room state.
+                    } else if (rawMessage.contains("ROOMSTATE") && rawMessage.contains("#$normalizedChannel")) {
+                        // ROOMSTATE is a strong signal that we've successfully joined the channel.
+                        hasJoinedChannel = true
                         _connectionState.value = ConnectionState.CONNECTED
+                        handleRoomState(rawMessage)
+                    } else if (rawMessage.contains("USERSTATE") && rawMessage.contains("#$normalizedChannel")) {
+                        // USERSTATE also indicates we are in the channel.
+                        hasJoinedChannel = true
+                        _connectionState.value = ConnectionState.CONNECTED
+                        handleUserState(rawMessage)
                     } else if (rawMessage.contains(" 353 ")) { // NAMES list
                         val usersPart = rawMessage.substringAfterLast(':')
                         val users = usersPart.trim().split(' ').filter { it.isNotBlank() }
@@ -410,14 +466,19 @@ class ChatService : Service() {
                             _chatters.value = currentChatters.toList().sorted()
                             Log.d(TAG, "User JOINED: $username. Total: ${currentChatters.size}")
                         }
+
+                        // If the JOIN is for the currently logged-in user, we're joined.
+                        val currentLogin = UserManager.currentUser?.login
+                        if (!currentLogin.isNullOrBlank() && username.equals(currentLogin, ignoreCase = true)) {
+                            hasJoinedChannel = true
+                            _connectionState.value = ConnectionState.CONNECTED
+                        }
                     } else if (partMatch != null) {
                         val username = partMatch.groupValues[1]
                         if (currentChatters.remove(username)) {
                             _chatters.value = currentChatters.toList().sorted()
                             Log.d(TAG, "User PARTED: $username. Total: ${currentChatters.size}")
                         }
-                    } else if (rawMessage.contains("USERSTATE")) {
-                        handleUserState(rawMessage)
                     } else if (rawMessage.contains("USERNOTICE") && rawMessage.contains("msg-id=channel.poll.")) {
                         handlePollNotice(rawMessage)
                     } else if (rawMessage.contains("USERNOTICE")) {
@@ -435,8 +496,6 @@ class ChatService : Service() {
                         handleClearMessage(rawMessage)
                     } else if (rawMessage.contains("CLEARCHAT")) {
                         handleClearChat(rawMessage)
-                    } else if (rawMessage.contains("ROOMSTATE")) {
-                        handleRoomState(rawMessage)
                     } else if (rawMessage.contains("NOTICE")) {
                         handleNotice(rawMessage)
                     }
@@ -449,7 +508,6 @@ class ChatService : Service() {
                                 Log.d(TAG, "parseInfo=${ChatMessageParser.debugParseInfo(rawMessage)}")
                             } catch (_: Exception) { /* ignore debug helper failures */ }
 
-                            // Try a minimal PRIVMSG fallback: extract author from prefix and trailing message
                             if (rawMessage.contains("PRIVMSG")) {
                                 try {
                                     val simpleMessage = rawMessage.substringAfter("PRIVMSG ").substringAfter(":", "").trim()
@@ -476,6 +534,15 @@ class ChatService : Service() {
                 }
             }
         }
+    }
+
+    // --- IRC helpers ---
+    private fun normalizeChannelName(channelName: String): String = channelName.trim().removePrefix("#")
+
+    private suspend fun DefaultClientWebSocketSession.sendIrc(line: String) {
+        // Twitch IRC expects \r\n and rejects NUL. Avoid double terminators.
+        val sanitized = line.replace("\u0000", "").trimEnd('\r', '\n')
+        send(Frame.Text("$sanitized\r\n"))
     }
 
     private fun handleNotice(rawMessage: String) {
