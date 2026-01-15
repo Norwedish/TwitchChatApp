@@ -1,8 +1,6 @@
 package com.norwedish.twitcherchat
 
 import android.util.Log
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
@@ -18,7 +16,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.Collections
-import java.util.Locale
 import java.util.UUID
 
 /**
@@ -40,8 +37,50 @@ class ChatViewModel : ViewModel() {
     private val _isEmoteMenuVisible = MutableStateFlow(false)
     val isEmoteMenuVisible: StateFlow<Boolean> = _isEmoteMenuVisible.asStateFlow()
 
+    enum class EmoteTab(val label: String, val provider: EmoteProvider?) {
+        TWITCH("Twitch", EmoteProvider.TWITCH),
+        BTTV("BTTV", EmoteProvider.BTTV),
+        SEVENTV("7TV", EmoteProvider.SEVENTV),
+        FFZ("FFZ", EmoteProvider.FRANKENFACEZ)
+    }
+
+    private val _selectedEmoteTab = MutableStateFlow(EmoteTab.TWITCH)
+    val selectedEmoteTab: StateFlow<EmoteTab> = _selectedEmoteTab.asStateFlow()
+
     private val _availableEmotes = MutableStateFlow<List<Emote>>(emptyList())
     val availableEmotes: StateFlow<List<Emote>> = _availableEmotes.asStateFlow()
+
+    // Filtered list the UI should render in the grid
+    private val _visibleEmotes = MutableStateFlow<List<Emote>>(emptyList())
+    val visibleEmotes: StateFlow<List<Emote>> = _visibleEmotes.asStateFlow()
+
+    // Tabs should be dynamic: only show providers that actually have emotes loaded.
+    private val _availableEmoteTabs = MutableStateFlow<List<EmoteTab>>(listOf(EmoteTab.TWITCH))
+    val availableEmoteTabs: StateFlow<List<EmoteTab>> = _availableEmoteTabs.asStateFlow()
+
+    private fun recomputeAvailableTabs(all: List<Emote>) {
+        val providersPresent = all.map { it.provider }.toSet()
+        val tabs = EmoteTab.entries.filter { it.provider in providersPresent }
+        _availableEmoteTabs.value = tabs
+
+        // Ensure current selection is still valid.
+        val current = _selectedEmoteTab.value
+        if (current !in tabs) {
+            _selectedEmoteTab.value = tabs.firstOrNull() ?: EmoteTab.TWITCH
+        }
+    }
+
+    private fun refreshVisibleEmotes() {
+        val tab = _selectedEmoteTab.value
+        val all = _availableEmotes.value
+        recomputeAvailableTabs(all)
+        _visibleEmotes.value = all.filter { it.provider == tab.provider }
+    }
+
+    fun onEmoteTabSelected(tab: EmoteTab) {
+        _selectedEmoteTab.value = tab
+        refreshVisibleEmotes()
+    }
 
     private val _isCurrentUserModerator = MutableStateFlow(false)
     val isCurrentUserModerator: StateFlow<Boolean> = _isCurrentUserModerator.asStateFlow()
@@ -260,7 +299,7 @@ class ChatViewModel : ViewModel() {
                         grouped.putAll(mapOf("Broadcaster" to mutableListOf(), "Moderators" to mutableListOf(), "VIPs" to mutableListOf(), "Viewers" to mutableListOf()))
                         // best-effort enrichment
                         try {
-                            UserManager.accessToken?.let { tkn ->
+                            UserManager.accessToken?.let { _ ->
                                 // Conservative fallback: without dedicated endpoints, mark viewers and optionally the broadcaster.
                                 val localSet = viewers.map { it }.toMutableList()
                                 // If the current user is the broadcaster, ensure they are listed under Broadcaster
@@ -342,7 +381,15 @@ class ChatViewModel : ViewModel() {
     }
 
     fun onEmoteMenuToggled() {
-        if (!_isEmoteMenuVisible.value) _availableEmotes.value = EmoteManager.getAllEmotes()
+        if (!_isEmoteMenuVisible.value) {
+            _availableEmotes.value = EmoteManager.getAllEmotes()
+            // Pick the first available provider tab (prefer Twitch if present)
+            recomputeAvailableTabs(_availableEmotes.value)
+            _selectedEmoteTab.value = _availableEmoteTabs.value.firstOrNull { it == EmoteTab.TWITCH }
+                ?: _availableEmoteTabs.value.firstOrNull()
+                ?: EmoteTab.TWITCH
+            refreshVisibleEmotes()
+        }
         _isEmoteMenuVisible.value = !_isEmoteMenuVisible.value
     }
 
@@ -376,15 +423,38 @@ class ChatViewModel : ViewModel() {
             badges = localBadges,
             replyParentMsgId = _replyToMessage.value?.tags?.get("id"),
             replyParentUserLogin = _replyToMessage.value?.authorLogin ?: _replyToMessage.value?.author,
-            replyParentMsgBody = _replyToMessage.value?.message
+            replyParentMsgBody = _replyToMessage.value?.message,
+            type = MessageType.SYSTEM,
+            tags = mapOf("client" to "pending_send")
         )
 
-        // Local echo
+        // Add a local pending item, but don't pretend it's a real sent/received message.
         _messages.update { current -> (current + listOf(localMessage)).takeLast(200) }
 
+        val replyId = localMessage.replyParentMsgId
+
         try {
-            chatServiceRef?.get()?.sendMessage(currentChannel, messageText, localMessage.replyParentMsgId)
-        } catch (_: Exception) {}
+            chatServiceRef?.get()?.sendMessage(currentChannel, messageText, replyId)
+        } catch (_: Exception) {
+            // If we can't send at all, mark as failed.
+            _messages.update { current ->
+                current.map {
+                    if (it.id == messageId) it.copy(message = "Failed to send (service unavailable).", type = MessageType.SYSTEM, tags = mapOf("client" to "send_failed")) else it
+                }
+            }
+        }
+
+        // Replace the pending item with a failure if we don't see our own echo back within a short window.
+        viewModelScope.launch {
+            delay(8_000)
+            _messages.update { current ->
+                val stillPending = current.any { it.id == messageId && it.tags["client"] == "pending_send" }
+                if (!stillPending) return@update current
+                current.map {
+                    if (it.id == messageId) it.copy(message = "Message wasn't confirmed by Twitch (not sent?).", type = MessageType.SYSTEM, tags = mapOf("client" to "send_unconfirmed")) else it
+                }
+            }
+        }
 
         _inputMessage.value = TextFieldValue("")
         _replyToMessage.value = null

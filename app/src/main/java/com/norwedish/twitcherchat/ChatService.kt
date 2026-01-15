@@ -18,13 +18,17 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import io.ktor.client.HttpClient
+import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.wss
+import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.headers
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.request.url
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.contentType
@@ -314,7 +318,36 @@ class ChatService : Service() {
         val nick = UserManager.currentUser?.login
 
         if (token == null || nick == null) {
+            // Surface a user-visible reason.
+            serviceScope.launch {
+                _chatMessages.emit(
+                    ChatMessage(
+                        author = null,
+                        authorLogin = null,
+                        message = "Not logged in — can't connect to chat.",
+                        authorColor = null,
+                        type = MessageType.SYSTEM,
+                        tags = mapOf("client" to "auth_missing")
+                    )
+                )
+            }
             return
+        }
+
+        // Kick off emote loading for the emote menu (best-effort; independent from IRC).
+        // NOTE: This requires the *channel/broadcaster* user id, not the currently logged-in user id.
+        // We resolve it using the Helix users endpoint.
+        serviceScope.launch {
+            try {
+                val broadcasterId = resolveBroadcasterIdByLogin(normalizeChannelName(channelName), token)
+                if (!broadcasterId.isNullOrBlank()) {
+                    EmoteManager.loadEmotesForChannel(broadcasterId, token, UserManager.CLIENT_ID)
+                } else {
+                    Log.w(TAG, "Couldn't resolve broadcaster id for #${normalizeChannelName(channelName)}; emote menu may be empty.")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Emote preload failed: ${e.message}")
+            }
         }
 
         currentChannel = channelName
@@ -360,6 +393,23 @@ class ChatService : Service() {
                     _connectionState.value = ConnectionState.DISCONNECTED
                 }
             }
+        }
+    }
+
+    private suspend fun resolveBroadcasterIdByLogin(login: String, token: String): String? {
+        return try {
+            // TwitchApi doesn't currently expose a getUserByLogin helper; use the raw Helix users endpoint.
+            val response: GetUsersResponse = client.get("https://api.twitch.tv/helix/users") {
+                url { parameters.append("login", login) }
+                headers {
+                    append("Authorization", "Bearer $token")
+                    append("Client-Id", UserManager.CLIENT_ID)
+                }
+            }.body()
+            response.data?.firstOrNull()?.id
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to resolve user id for login=$login: ${e.message}")
+            null
         }
     }
 
@@ -697,4 +747,3 @@ class ChatService : Service() {
         }
     }
 }
-

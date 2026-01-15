@@ -238,7 +238,9 @@ fun ChatScreen(
     val messages by viewModel.messages.collectAsState()
     val inputMessage by viewModel.inputMessage.collectAsState()
     val isEmoteMenuVisible by viewModel.isEmoteMenuVisible.collectAsState()
-    val availableEmotes by viewModel.availableEmotes.collectAsState()
+    val visibleEmotes by viewModel.visibleEmotes.collectAsState()
+    val selectedEmoteTab by viewModel.selectedEmoteTab.collectAsState()
+    val availableEmoteTabs by viewModel.availableEmoteTabs.collectAsState()
     val listState = rememberLazyListState()
     // Local tracking of whether the user is at the bottom. We mirror the ViewModel's state but
     // keep a local copy to trigger immediate UI-side auto-scrolling when messages change.
@@ -262,7 +264,7 @@ fun ChatScreen(
 
     val uriHandler = LocalUriHandler.current // uri handler for opening external links
     // Observe Cast debug state to surface errors and provide retry/fallback actions
-    val castDebugState by CastManager.debugState.collectAsState()
+    // (currently unused; keep the state in CastManager)
 
     if (isChatterListVisible) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -683,17 +685,41 @@ fun ChatScreen(
             }
 
             if (isEmoteMenuVisible) {
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(250.dp)
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                 ) {
+                    val tabs = availableEmoteTabs
+
+                    // If nothing is available (should be rare), just show an empty grid.
+                    val selectedIndex = remember(tabs, selectedEmoteTab) {
+                        tabs.indexOf(selectedEmoteTab).takeIf { it >= 0 } ?: 0
+                    }
+
+                    if (tabs.isNotEmpty()) {
+                        ScrollableTabRow(
+                            selectedTabIndex = selectedIndex,
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        ) {
+                            tabs.forEach { tab ->
+                                Tab(
+                                    selected = selectedEmoteTab == tab,
+                                    onClick = { viewModel.onEmoteTabSelected(tab) },
+                                    text = { Text(tab.label) }
+                                )
+                            }
+                        }
+                    }
+
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(minSize = 48.dp),
-                        contentPadding = PaddingValues(8.dp)
+                        contentPadding = PaddingValues(8.dp),
+                        modifier = Modifier.fillMaxSize()
                     ) {
-                        items(availableEmotes, key = { it.id }) { emote ->
+                        items(visibleEmotes, key = { it.provider.name + ":" + it.id }) { emote ->
                             IconButton(onClick = { viewModel.onEmoteSelected(emote.code) }) {
                                 AsyncImage(
                                     model = emote.url,
