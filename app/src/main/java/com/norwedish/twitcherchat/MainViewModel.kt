@@ -64,4 +64,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isLoading.value = false
         }
     }
+
+    fun refreshFollowedStreams() {
+        loadFollowedStreams()
+    }
 }

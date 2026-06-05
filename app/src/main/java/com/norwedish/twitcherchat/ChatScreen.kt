@@ -1139,6 +1139,25 @@ fun ChatMessageItem(
                         }
                     }
 
+                    // User Icon Badges (Broadcaster, Moderator, VIP, Subscriber, etc.) - Twitch Official
+                    val userIconUrls = UserIconManager.getUserIconUrls(
+                        badges = message.badges,
+                        messageType = message.type,
+                        broadcasterId = broadcasterId,
+                        authorId = message.tags["user-id"],
+                        currentBroadcasterId = broadcasterId
+                    )
+
+                    userIconUrls.forEach { userIcon ->
+                        AsyncImage(
+                            model = userIcon.url,
+                            contentDescription = userIcon.contentDescription,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .align(Alignment.CenterVertically)
+                        )
+                    }
+
                     // Author
                     if (message.author != null) {
                         Text(

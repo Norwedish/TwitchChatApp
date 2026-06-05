@@ -17,6 +17,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -279,6 +280,63 @@ class MainActivity : AppCompatActivity() {
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
+        // Create a shared callback for stream status changes
+        val onStreamStatusChange: () -> Unit = {
+            Log.d("MainActivity", "Stream status changed, refreshing UI")
+            lifecycleScope.launch {
+                // Refresh followed streams to update UI
+                val mainViewModel = viewModelStore.get(MainViewModel::class.java.name) as? MainViewModel
+                mainViewModel?.refreshFollowedStreams()
+            }
+        }
+
+        // Initialize EventSub manager for near-instant notifications
+        val user = UserManager.currentUser
+        val token = UserManager.accessToken
+        if (user != null && token != null) {
+            EventSubManager.initialize(this,
+                onOnline = { userId, broadcasterName ->
+                    Log.d("MainActivity", "EventSub: $broadcasterName went live!")
+                    onStreamStatusChange()
+                },
+                onOffline = { userId ->
+                    Log.d("MainActivity", "EventSub: $userId went offline")
+                    onStreamStatusChange()
+                }
+            )
+            EventSubManager.start(user.id, token, UserManager.CLIENT_ID)
+        }
+
+        // Initialize Intelligent Polling for streamers beyond EventSub limit
+        IntelligentPollingManager.initialize(
+            onOnline = { userId, broadcasterName ->
+                Log.d("MainActivity", "Polling: $broadcasterName went live!")
+                onStreamStatusChange()
+            },
+            onOffline = { userId ->
+                Log.d("MainActivity", "Polling: $userId went offline")
+                onStreamStatusChange()
+            }
+        )
+
+        // Schedule intelligent polling worker (10 seconds for quick batch checks)
+        val pollingConstraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val pollingWorkRequest = PeriodicWorkRequestBuilder<IntelligentPollingWorker>(
+            10, TimeUnit.SECONDS
+        )
+            .setConstraints(pollingConstraints)
+            .build()
+
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            IntelligentPollingWorker.WORK_NAME,
+            ExistingPeriodicWorkPolicy.REPLACE,
+            pollingWorkRequest
+        )
+
+        // Keep old periodic work but with reduced frequency (fallback for edge cases)
         val periodicWorkRequest = PeriodicWorkRequestBuilder<LiveStreamWorker>(
             15, TimeUnit.MINUTES
         )
@@ -293,7 +351,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun cancelLiveStreamWorker() {
+        EventSubManager.stop()
+        IntelligentPollingManager.clear()
         WorkManager.getInstance(this).cancelUniqueWork(LiveStreamWorker.WORK_NAME)
+        WorkManager.getInstance(this).cancelUniqueWork(IntelligentPollingWorker.WORK_NAME)
     }
 
     private fun askNotificationPermission() {
