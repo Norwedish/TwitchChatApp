@@ -11,7 +11,10 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.os.IBinder
+import android.os.Build
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -65,6 +68,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -100,7 +105,29 @@ fun ChatScreen(
     val context = LocalContext.current
     var showCastDialog by remember { mutableStateOf(false) } // state for cast dialog
 
-    // Read the streamTitle from the ViewModel early so listeners can reference it
+    // Listen for logout events (token expiration, etc.) and navigate back to login
+    DisposableEffect(Unit) {
+        val logoutReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == UserManager.ACTION_USER_LOGGED_OUT) {
+                    Log.d("ChatScreen", "Detected user logout (token expired). Navigating to login.")
+                    onNavigateBack()
+                }
+            }
+        }
+
+        val intentFilter = IntentFilter(UserManager.ACTION_USER_LOGGED_OUT)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(logoutReceiver, intentFilter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            context.registerReceiver(logoutReceiver, intentFilter)
+        }
+
+        onDispose {
+            context.unregisterReceiver(logoutReceiver)
+        }
+    }
     val streamTitle by viewModel.streamTitle.collectAsState()
 
     // make a coroutine scope available for the session listener
@@ -685,47 +712,107 @@ fun ChatScreen(
             }
 
             if (isEmoteMenuVisible) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(250.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+                ModalBottomSheet(
+                    onDismissRequest = { viewModel.onEmoteMenuToggled() },
+                    sheetState = sheetState,
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
                 ) {
-                    val tabs = availableEmoteTabs
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 400.dp)
+                    ) {
+                        // Header
+                        Text(
+                            "Select an Emote",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(16.dp),
+                            fontWeight = FontWeight.Bold
+                        )
 
-                    // If nothing is available (should be rare), just show an empty grid.
-                    val selectedIndex = remember(tabs, selectedEmoteTab) {
-                        tabs.indexOf(selectedEmoteTab).takeIf { it >= 0 } ?: 0
-                    }
+                        // Log available emotes for debugging
+                        LaunchedEffect(visibleEmotes, availableEmoteTabs) {
+                            Log.d("EmoteMenu", "Visible emotes count: ${visibleEmotes.size}")
+                            Log.d("EmoteMenu", "Available tabs: ${availableEmoteTabs.map { it.label }}")
+                            Log.d("EmoteMenu", "Selected tab: ${selectedEmoteTab.label}")
+                        }
 
-                    if (tabs.isNotEmpty()) {
-                        ScrollableTabRow(
-                            selectedTabIndex = selectedIndex,
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                        ) {
-                            tabs.forEach { tab ->
-                                Tab(
-                                    selected = selectedEmoteTab == tab,
-                                    onClick = { viewModel.onEmoteTabSelected(tab) },
-                                    text = { Text(tab.label) }
-                                )
+                        val tabs = availableEmoteTabs
+
+                        // Emote grid - takes most of the space
+                        Box(modifier = Modifier.weight(1f)) {
+                            if (visibleEmotes.isEmpty()) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.padding(16.dp)
+                                    ) {
+                                        if (tabs.isEmpty()) {
+                                            Icon(Icons.Default.Error, contentDescription = "No emotes", modifier = Modifier.size(48.dp))
+                                            Text("No emotes loaded", style = MaterialTheme.typography.bodyMedium)
+                                        } else {
+                                            Icon(Icons.Default.Search, contentDescription = "No emotes", modifier = Modifier.size(48.dp))
+                                            Text(
+                                                "No emotes for ${selectedEmoteTab.label}",
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                LazyVerticalGrid(
+                                    columns = GridCells.Adaptive(minSize = 50.dp),
+                                    contentPadding = PaddingValues(8.dp),
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    items(visibleEmotes, key = { it.provider.name + ":" + it.id }) { emote ->
+                                        Column(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .clickable { viewModel.onEmoteSelected(emote.code) }
+                                                .padding(4.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            AsyncImage(
+                                                model = emote.url,
+                                                contentDescription = emote.code,
+                                                modifier = Modifier.size(40.dp),
+                                                contentScale = ContentScale.Fit
+                                            )
+                                            Text(
+                                                emote.code,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontSize = 10.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.padding(top = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
-                    }
 
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 48.dp),
-                        contentPadding = PaddingValues(8.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(visibleEmotes, key = { it.provider.name + ":" + it.id }) { emote ->
-                            IconButton(onClick = { viewModel.onEmoteSelected(emote.code) }) {
-                                AsyncImage(
-                                    model = emote.url,
-                                    contentDescription = emote.code,
-                                    modifier = Modifier.size(32.dp)
-                                )
+                        // Tab row at the bottom for platform selection
+                        if (tabs.isNotEmpty()) {
+                            Divider(modifier = Modifier.fillMaxWidth())
+                            ScrollableTabRow(
+                                selectedTabIndex = tabs.indexOf(selectedEmoteTab).coerceAtLeast(0),
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                tabs.forEach { tab ->
+                                    Tab(
+                                        selected = selectedEmoteTab == tab,
+                                        onClick = { viewModel.onEmoteTabSelected(tab) },
+                                        text = { Text(tab.label, fontSize = 11.sp) }
+                                    )
+                                }
                             }
                         }
                     }

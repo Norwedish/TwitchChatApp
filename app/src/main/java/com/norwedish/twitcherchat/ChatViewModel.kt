@@ -60,21 +60,27 @@ class ChatViewModel : ViewModel() {
 
     private fun recomputeAvailableTabs(all: List<Emote>) {
         val providersPresent = all.map { it.provider }.toSet()
+        Log.d(TAG, "Recomputing tabs. Providers present: $providersPresent")
         val tabs = EmoteTab.entries.filter { it.provider in providersPresent }
+        Log.d(TAG, "Computed tabs: ${tabs.map { it.label }}")
         _availableEmoteTabs.value = tabs
 
         // Ensure current selection is still valid.
         val current = _selectedEmoteTab.value
         if (current !in tabs) {
             _selectedEmoteTab.value = tabs.firstOrNull() ?: EmoteTab.TWITCH
+            Log.d(TAG, "Current tab ${current.label} not available, switched to ${_selectedEmoteTab.value.label}")
         }
     }
 
     private fun refreshVisibleEmotes() {
         val tab = _selectedEmoteTab.value
         val all = _availableEmotes.value
+        Log.d(TAG, "Refreshing visible emotes for tab ${tab.label}")
         recomputeAvailableTabs(all)
-        _visibleEmotes.value = all.filter { it.provider == tab.provider }
+        val filtered = all.filter { it.provider == tab.provider }
+        Log.d(TAG, "Filtered emotes for ${tab.label}: ${filtered.size} (from total ${all.size})")
+        _visibleEmotes.value = filtered
     }
 
     fun onEmoteTabSelected(tab: EmoteTab) {
@@ -382,13 +388,18 @@ class ChatViewModel : ViewModel() {
 
     fun onEmoteMenuToggled() {
         if (!_isEmoteMenuVisible.value) {
-            _availableEmotes.value = EmoteManager.getAllEmotes()
+            val allEmotes = EmoteManager.getAllEmotes()
+            Log.d(TAG, "Opening emote menu. Total emotes available: ${allEmotes.size}")
+            _availableEmotes.value = allEmotes
             // Pick the first available provider tab (prefer Twitch if present)
             recomputeAvailableTabs(_availableEmotes.value)
+            Log.d(TAG, "Available tabs: ${_availableEmoteTabs.value.map { it.label }}")
             _selectedEmoteTab.value = _availableEmoteTabs.value.firstOrNull { it == EmoteTab.TWITCH }
                 ?: _availableEmoteTabs.value.firstOrNull()
                 ?: EmoteTab.TWITCH
+            Log.d(TAG, "Selected tab: ${_selectedEmoteTab.value.label}")
             refreshVisibleEmotes()
+            Log.d(TAG, "Visible emotes for ${_selectedEmoteTab.value.label}: ${_visibleEmotes.value.size}")
         }
         _isEmoteMenuVisible.value = !_isEmoteMenuVisible.value
     }

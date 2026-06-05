@@ -91,6 +91,13 @@ data class FfzEmote(
 )
 
 
+// --- Token Refresh Interface ---
+
+interface TokenRefreshListener {
+    suspend fun onTokenExpired(): String?
+}
+
+
 // --- EmoteManager ---
 
 object EmoteManager {
@@ -106,6 +113,9 @@ object EmoteManager {
         }
     }
 
+    private var tokenRefreshListener: TokenRefreshListener? = null
+    private var clientIdCache: String = ""
+
     // Cache for emotes to avoid re-fetching on every message
     private val channelEmotes = ConcurrentHashMap<String, List<Emote>>()
     // Separate global caches per provider so a partial failure doesn't permanently block other providers
@@ -114,17 +124,24 @@ object EmoteManager {
     private var global7tv: List<Emote> = emptyList()
     private var globalFfz: List<Emote> = emptyList()
 
+    fun setTokenRefreshListener(listener: TokenRefreshListener) {
+        tokenRefreshListener = listener
+    }
+
     fun getAllEmotes(): List<Emote> {
         return globalTwitch + globalBttv + global7tv + globalFfz + channelEmotes.values.flatten()
     }
 
     suspend fun loadEmotesForChannel(twitchUserId: String, token: String, clientId: String) {
         channelEmotes.clear()
+        Log.d(TAG, "Starting emote load for channel $twitchUserId")
+
+        var currentToken = token
 
         // Load global provider emotes individually if not already loaded. This allows retry for providers that failed previously.
         if (globalTwitch.isEmpty()) {
             try {
-                globalTwitch = TwitchApi.getGlobalTwitchEmotes(token, clientId).map {
+                val twitchEmotes = TwitchApi.getGlobalTwitchEmotes(currentToken, clientId).map {
                     Emote(
                         id = it.id,
                         code = it.name,
@@ -132,35 +149,89 @@ object EmoteManager {
                         provider = EmoteProvider.TWITCH
                     )
                 }
-            } catch (_: Exception) {
-                globalTwitch = emptyList()
+                globalTwitch = twitchEmotes
+                Log.d(TAG, "✓ Loaded global Twitch emotes: ${globalTwitch.size}")
+            } catch (e: Exception) {
+                Log.e(TAG, "✗ Failed to load Twitch emotes: ${e.message}", e)
+                // Check if token expired (401 or Unauthorized)
+                if (e.message?.contains("401") == true || e.message?.contains("Unauthorized") == true) {
+                    Log.d(TAG, "Token expired, attempting refresh...")
+                    val newToken = tokenRefreshListener?.onTokenExpired()
+                    if (newToken != null) {
+                        currentToken = newToken
+                        try {
+                            val twitchEmotes = TwitchApi.getGlobalTwitchEmotes(currentToken, clientId).map {
+                                Emote(
+                                    id = it.id,
+                                    code = it.name,
+                                    url = "https://static-cdn.jtvnw.net/emoticons/v2/${it.id}/default/dark/1.0",
+                                    provider = EmoteProvider.TWITCH
+                                )
+                            }
+                            globalTwitch = twitchEmotes
+                            Log.d(TAG, "✓ Loaded global Twitch emotes after token refresh: ${globalTwitch.size}")
+                        } catch (retryE: Exception) {
+                            globalTwitch = emptyList()
+                            Log.e(TAG, "✗ Failed to load Twitch emotes after token refresh: ${retryE.message}", retryE)
+                        }
+                    } else {
+                        globalTwitch = emptyList()
+                        Log.e(TAG, "Token refresh failed or returned null")
+                    }
+                } else {
+                    globalTwitch = emptyList()
+                }
             }
-            Log.d(TAG, "Loaded global Twitch emotes: ${globalTwitch.size}")
         }
 
         if (globalBttv.isEmpty()) {
-            globalBttv = try { fetchGlobalBttvEmotes() } catch (_: Exception) { emptyList() }
-            Log.d(TAG, "Loaded global BTTV emotes: ${globalBttv.size}")
+            try {
+                globalBttv = fetchGlobalBttvEmotes()
+                Log.d(TAG, "✓ Loaded global BTTV emotes: ${globalBttv.size}")
+            } catch (e: Exception) {
+                globalBttv = emptyList()
+                Log.e(TAG, "✗ Failed to load BTTV emotes: ${e.message}")
+            }
         }
 
         if (global7tv.isEmpty()) {
-            global7tv = try { fetchGlobal7tvEmotes() } catch (_: Exception) { emptyList() }
-            Log.d(TAG, "Loaded global 7TV emotes: ${global7tv.size}")
+            try {
+                global7tv = fetchGlobal7tvEmotes()
+                Log.d(TAG, "✓ Loaded global 7TV emotes: ${global7tv.size}")
+            } catch (e: Exception) {
+                global7tv = emptyList()
+                Log.e(TAG, "✗ Failed to load 7TV emotes: ${e.message}")
+            }
         }
 
         if (globalFfz.isEmpty()) {
-            globalFfz = try { fetchGlobalFfzEmotes() } catch (_: Exception) { emptyList() }
-            Log.d(TAG, "Loaded global FFZ emotes: ${globalFfz.size}")
+            try {
+                globalFfz = fetchGlobalFfzEmotes()
+                Log.d(TAG, "✓ Loaded global FFZ emotes: ${globalFfz.size}")
+            } catch (e: Exception) {
+                globalFfz = emptyList()
+                Log.e(TAG, "✗ Failed to load FFZ emotes: ${e.message}")
+            }
         }
 
-        val channelBttv = fetchChannelBttvEmotes(twitchUserId)
-        val channel7tv = fetchChannel7tvEmotes(twitchUserId)
-        val channelFfz = fetchChannelFfzEmotes(twitchUserId)
+        val channelBttv = try { fetchChannelBttvEmotes(twitchUserId) } catch (e: Exception) { Log.w(TAG, "Channel BTTV failed: ${e.message}"); emptyList() }
+        val channel7tv = try { fetchChannel7tvEmotes(twitchUserId) } catch (e: Exception) { Log.w(TAG, "Channel 7TV failed: ${e.message}"); emptyList() }
+        val channelFfz = try { fetchChannelFfzEmotes(twitchUserId) } catch (e: Exception) { Log.w(TAG, "Channel FFZ failed: ${e.message}"); emptyList() }
         val allChannelEmotes = channelBttv + channel7tv + channelFfz
         channelEmotes[twitchUserId] = allChannelEmotes
 
-        Log.d(TAG, "Channel emotes for $twitchUserId loaded: total=${allChannelEmotes.size} (bttv=${channelBttv.size}, 7tv=${channel7tv.size}, ffz=${channelFfz.size})")
-        Log.d(TAG, "Global totals: twitch=${globalTwitch.size}, bttv=${globalBttv.size}, 7tv=${global7tv.size}, ffz=${globalFfz.size}")
+        Log.d(TAG, "========== EMOTE LOAD SUMMARY ==========")
+        Log.d(TAG, "Global Emotes:")
+        Log.d(TAG, "  Twitch: ${globalTwitch.size}")
+        Log.d(TAG, "  BTTV:   ${globalBttv.size}")
+        Log.d(TAG, "  7TV:    ${global7tv.size}")
+        Log.d(TAG, "  FFZ:    ${globalFfz.size}")
+        Log.d(TAG, "Channel Emotes for $twitchUserId:")
+        Log.d(TAG, "  BTTV:   ${channelBttv.size}")
+        Log.d(TAG, "  7TV:    ${channel7tv.size}")
+        Log.d(TAG, "  FFZ:    ${channelFfz.size}")
+        Log.d(TAG, "TOTAL EMOTES AVAILABLE: ${getAllEmotes().size}")
+        Log.d(TAG, "========================================")
     }
 
     fun parseThirdPartyEmotes(message: String): List<ParsedEmote> {
@@ -265,15 +336,21 @@ object EmoteManager {
                     ?: emote.data.host.files.find { it.name == "2x.webp" } 
                     ?: emote.data.host.files.firstOrNull()
                 file?.let {
+                    val urlBase = emote.data.host.url.let {
+                        if (it.startsWith("//")) "https:$it"
+                        else if (it.startsWith("http")) it
+                        else "https://$it"
+                    }
                     Emote(
                         id = emote.id,
                         code = emote.name,
-                        url = "https:${emote.data.host.url}/${it.name}", // v3 API gives schemeless URL
+                        url = "$urlBase/${it.name}",
                         provider = EmoteProvider.SEVENTV
                     )
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to fetch channel 7TV emotes: ${e.message}")
             emptyList()
         }
     }

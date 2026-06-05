@@ -164,6 +164,24 @@ class ChatService : Service() {
     override fun onCreate() {
         super.onCreate()
         loadSuppressedNoticesFromPrefs()
+        initializeTokenRefreshListener()
+    }
+
+    private fun initializeTokenRefreshListener() {
+        EmoteManager.setTokenRefreshListener(object : TokenRefreshListener {
+            override suspend fun onTokenExpired(): String? {
+                return try {
+                    Log.d(TAG, "Token expired, attempting to refresh...")
+                    // For now, we'll return null to trigger a re-login
+                    // In a production app, you would implement actual token refresh logic here
+                    // This would involve calling Twitch's token refresh endpoint
+                    null
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to refresh token", e)
+                    null
+                }
+            }
+        })
     }
 
     private fun loadSuppressedNoticesFromPrefs() {
@@ -481,6 +499,21 @@ class ChatService : Service() {
                         return@forEach
                     }
 
+                    // Detect IRC authentication/error codes that indicate token expiration or invalid credentials
+                    // RFC 1459 numeric error codes:
+                    // 421: ERR_UNKNOWNCOMMAND (often sent after auth failure)
+                    // 671: ERR_PASSWDMISMATCH (wrong password/token)
+                    // 902: ERR_NICKTAKEN (nick in use, can indicate auth issues)
+                    if (rawMessage.contains(" 421 ") ||
+                        rawMessage.contains(" 671 ") ||
+                        rawMessage.contains(" 902 ") ||
+                        rawMessage.contains("ERR_PASSWDMISMATCH") ||
+                        rawMessage.contains("ERR_UNKNOWNCOMMAND")) {
+                        Log.e(TAG, "IRC authentication error detected: $rawMessage. Token may be invalid or expired.")
+                        UserManager.logout()
+                        return@forEach
+                    }
+
                     val joinMatch = Regex(":([^!]+)!.* JOIN #").find(rawMessage)
                     val partMatch = Regex(":([^!]+)!.* PART #").find(rawMessage)
 
@@ -603,6 +636,18 @@ class ChatService : Service() {
             if (parts.size == 2) parts[0] to parts[1] else parts[0] to ""
         }
         val noticeMsgId = tags["msg-id"] ?: ""
+
+        // Check for authentication failure notices (token expired, etc.)
+        when (noticeMsgId) {
+            "login_authentication_failed", "msg_ratelimit" -> {
+                Log.e(TAG, "Authentication or rate limit error detected: msg-id=$noticeMsgId. Triggering logout.")
+                serviceScope.launch {
+                    UserManager.logout()
+                }
+                return
+            }
+        }
+
         if (isNoticeSuppressed(noticeMsgId)) {
             Log.d(TAG, "Suppressing NOTICE msg-id=$noticeMsgId (configured suppression)")
             return
