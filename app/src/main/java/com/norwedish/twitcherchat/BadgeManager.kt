@@ -113,8 +113,15 @@ object BadgeManager {
         return globalBadgeCache[badgeName]
     }
 
-    // Backwards-compatible method used elsewhere
     fun getBadgeUrl(badgeName: String): String? {
         return getBadgeUrl(badgeName, null)
+    }
+
+    /**
+     * Check if a badge is channel-specific (exists in the channel badge cache)
+     */
+    fun isChannelBadge(badgeName: String, broadcasterId: String?): Boolean {
+        if (broadcasterId == null) return false
+        return channelBadgeCache[broadcasterId]?.containsKey(badgeName) ?: false
     }
 }

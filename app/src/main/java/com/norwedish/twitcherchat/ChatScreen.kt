@@ -1126,20 +1126,8 @@ fun ChatMessageItem(
                         else -> {}
                     }
 
-                    // Badges
-                    message.badges.forEach { badgeName ->
-                        BadgeManager.getBadgeUrl(badgeName, broadcasterId)?.let { url ->
-                            AsyncImage(
-                                model = url,
-                                contentDescription = badgeName,
-                                modifier = Modifier
-                                    .size(18.dp)
-                                    .align(Alignment.CenterVertically)
-                            )
-                        }
-                    }
-
-                    // User Icon Badges (Broadcaster, Moderator, VIP, Subscriber, etc.) - Twitch Official
+                    // Display all user badges and icons (Twitch official, channel custom, and global custom badges)
+                    // Unified through UserIconManager which handles all badge types sorted by priority
                     val userIconUrls = UserIconManager.getUserIconUrls(
                         badges = message.badges,
                         messageType = message.type,
@@ -1153,7 +1141,7 @@ fun ChatMessageItem(
                             model = userIcon.url,
                             contentDescription = userIcon.contentDescription,
                             modifier = Modifier
-                                .size(16.dp)
+                                .size(18.dp)
                                 .align(Alignment.CenterVertically)
                         )
                     }
