@@ -125,3 +125,6 @@ object BadgeManager {
         return channelBadgeCache[broadcasterId]?.containsKey(badgeName) ?: false
     }
 }
+
+
+
