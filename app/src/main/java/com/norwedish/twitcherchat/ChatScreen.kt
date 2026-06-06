@@ -1159,15 +1159,23 @@ fun ChatMessageItem(
                     }
 
                     // Render the tokenized message content
-                    if (message.type == MessageType.SUBSCRIPTION) {
-                        // Subscription/usernotice: the server supplies a "system-msg" which is the human-readable text.
-                        // Render it plainly to avoid tokenization mismatches and to ensure clarity for subs/gifts.
+                    if (message.type == MessageType.SUBSCRIPTION || message.type == MessageType.SYSTEM) {
+                        // Render system/sub messages plainly
                         Text(
                             text = message.message,
                             modifier = Modifier.align(Alignment.CenterVertically),
                             fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            fontWeight = if (message.type == MessageType.SUBSCRIPTION) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (message.type == MessageType.SYSTEM) {
+                                if (message.tags["client"]?.contains("failed") == true || message.tags["client"]?.contains("unconfirmed") == true)
+                                    MaterialTheme.colorScheme.error
+                                else if (message.tags["client"] == "pending_send")
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         )
                     } else {
                         tokens.forEach { token ->

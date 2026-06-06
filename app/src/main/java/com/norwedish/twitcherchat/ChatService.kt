@@ -172,9 +172,6 @@ class ChatService : Service() {
             override suspend fun onTokenExpired(): String? {
                 return try {
                     Log.d(TAG, "Token expired, attempting to refresh...")
-                    // For now, we'll return null to trigger a re-login
-                    // In a production app, you would implement actual token refresh logic here
-                    // This would involve calling Twitch's token refresh endpoint
                     null
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to refresh token", e)
@@ -194,7 +191,6 @@ class ChatService : Service() {
             } else {
                 suppressedRoomStateNotices.addAll(csv.split(',').map { it.trim() }.filter { it.isNotEmpty() })
             }
-            Log.d(TAG, "Loaded suppressed NOTICE msg-ids: ${suppressedRoomStateNotices}")
         } catch (t: Throwable) {
             suppressedRoomStateNotices.clear()
             suppressedRoomStateNotices.addAll(defaultSuppressedNotices)
@@ -205,8 +201,7 @@ class ChatService : Service() {
         try {
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             prefs.edit().putString(PREF_KEY_SUPPRESSED, suppressedRoomStateNotices.joinToString(",")).apply()
-            Log.d(TAG, "Saved suppressed NOTICE msg-ids: ${suppressedRoomStateNotices}")
-        } catch (_: Throwable) { /* best-effort */ }
+        } catch (_: Throwable) { }
     }
 
     fun isNoticeSuppressed(msgId: String): Boolean = suppressedRoomStateNotices.contains(msgId)
@@ -244,14 +239,12 @@ class ChatService : Service() {
     val deletedUserMessages = _deletedUserMessages.asSharedFlow()
 
     private val _isCurrentUserModerator = MutableStateFlow(false)
-    val isCurrentUserModerator = _isCurrentUserModerator.asSharedFlow()
+    val isCurrentUserModerator = _isCurrentUserModerator.asStateFlow()
 
     private var session: DefaultClientWebSocketSession? = null
     private var connectionJob: Job? = null
     var currentChannel: String = ""
 
-    // Track whether we have successfully JOINed the current channel.
-    // Without join, Twitch will not accept PRIVMSG to that channel.
     @Volatile
     private var hasJoinedChannel: Boolean = false
 
@@ -290,6 +283,7 @@ class ChatService : Service() {
         isStarted = true
 
         val channelName = intent?.getStringExtra("channelName") ?: return START_NOT_STICKY
+        val twitchUserId = intent.getStringExtra("twitchUserId")
 
         createNotificationChannel()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -301,7 +295,7 @@ class ChatService : Service() {
 
         startForeground(NOTIFICATION_ID, notification)
 
-        connectAndJoin(channelName)
+        connectAndJoin(channelName, twitchUserId)
 
         return START_STICKY
     }
@@ -310,6 +304,7 @@ class ChatService : Service() {
         super.onDestroy()
         serviceJob.cancel()
         disconnect()
+        isStarted = false
     }
 
     private fun createNotificationChannel() {
@@ -318,7 +313,6 @@ class ChatService : Service() {
         val importance = NotificationManager.IMPORTANCE_DEFAULT
         val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
             description = descriptionText
-            // Disable sound and vibration for chat notifications (user requested)
             setSound(null, null)
             enableVibration(false)
         }
@@ -327,7 +321,7 @@ class ChatService : Service() {
         notificationManager.createNotificationChannel(channel)
     }
 
-    fun connectAndJoin(channelName: String) {
+    fun connectAndJoin(channelName: String, twitchUserId: String? = null) {
         if (connectionState.value == ConnectionState.CONNECTED || connectionState.value == ConnectionState.CONNECTING) {
             return
         }
@@ -336,13 +330,12 @@ class ChatService : Service() {
         val nick = UserManager.currentUser?.login
 
         if (token == null || nick == null) {
-            // Surface a user-visible reason.
             serviceScope.launch {
                 _chatMessages.emit(
                     ChatMessage(
                         author = null,
                         authorLogin = null,
-                        message = "Not logged in — can't connect to chat.",
+                        message = "Not logged in \u2014 can't connect to chat.",
                         authorColor = null,
                         type = MessageType.SYSTEM,
                         tags = mapOf("client" to "auth_missing")
@@ -352,19 +345,20 @@ class ChatService : Service() {
             return
         }
 
-        // Kick off emote loading for the emote menu (best-effort; independent from IRC).
-        // NOTE: This requires the *channel/broadcaster* user id, not the currently logged-in user id.
-        // We resolve it using the Helix users endpoint.
+        // Kick off emote and badge loading
         serviceScope.launch {
             try {
-                val broadcasterId = resolveBroadcasterIdByLogin(normalizeChannelName(channelName), token)
+                // Use passed ID if available, otherwise resolve it
+                val broadcasterId = twitchUserId ?: resolveBroadcasterIdByLogin(normalizeChannelName(channelName), token)
                 if (!broadcasterId.isNullOrBlank()) {
                     EmoteManager.loadEmotesForChannel(broadcasterId, token, UserManager.CLIENT_ID)
+                    BadgeManager.loadGlobalBadges(token, UserManager.CLIENT_ID)
+                    BadgeManager.loadChannelBadges(broadcasterId, token, UserManager.CLIENT_ID)
                 } else {
-                    Log.w(TAG, "Couldn't resolve broadcaster id for #${normalizeChannelName(channelName)}; emote menu may be empty.")
+                    Log.w(TAG, "Couldn't resolve broadcaster id for #${normalizeChannelName(channelName)}; badges might be missing.")
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Emote preload failed: ${e.message}")
+                Log.w(TAG, "Emote/Badge preload failed: ${e.message}")
             }
         }
 
@@ -372,7 +366,7 @@ class ChatService : Service() {
         hasJoinedChannel = false
 
         connectionJob?.cancel()
-        currentChatters.clear() // Clear chatters for the new channel
+        currentChatters.clear()
         _chatters.value = emptyList()
         _roomState.value = null
 
@@ -386,9 +380,6 @@ class ChatService : Service() {
                     path = ""
                 ) {
                     session = this
-
-                    // Twitch IRC expects CRLF-terminated commands.
-                    // Also normalize token to avoid accidentally sending oauth:oauth:...
                     val normalizedToken = token.removePrefix("oauth:")
 
                     sendIrc("PASS oauth:$normalizedToken")
@@ -400,8 +391,8 @@ class ChatService : Service() {
                     listenToMessages(channelName)
                 }
             } catch (_: CancellationException) {
-                // This is expected when the job is cancelled
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.e(TAG, "WebSocket error: ${e.message}")
                 _connectionState.value = ConnectionState.ERROR
             } finally {
                 session?.close()
@@ -416,7 +407,6 @@ class ChatService : Service() {
 
     private suspend fun resolveBroadcasterIdByLogin(login: String, token: String): String? {
         return try {
-            // TwitchApi doesn't currently expose a getUserByLogin helper; use the raw Helix users endpoint.
             val response: GetUsersResponse = client.get("https://api.twitch.tv/helix/users") {
                 url { parameters.append("login", login) }
                 headers {
@@ -432,26 +422,25 @@ class ChatService : Service() {
     }
 
     fun disconnect() {
-        _isCurrentUserModerator.value = false // Reset mod status on disconnect
+        _isCurrentUserModerator.value = false
         hasJoinedChannel = false
         connectionJob?.cancel()
-        _poll.value = null // Clear the poll when disconnecting
+        _poll.value = null
         _roomState.value = null
     }
 
-    fun sendMessage(channelName: String, message: String, replyToMessageId: String? = null) {
+    fun sendMessage(channelName: String, message: String, replyToMessageId: String? = null, nonce: String? = null) {
         val activeSession = session
         val normalizedChannel = normalizeChannelName(channelName)
         if (message.isBlank()) return
 
-        // If we aren't actually joined yet, don't pretend we sent.
         if (!hasJoinedChannel || _connectionState.value != ConnectionState.CONNECTED || activeSession?.isActive != true) {
             serviceScope.launch {
                 _chatMessages.emit(
                     ChatMessage(
                         author = null,
                         authorLogin = null,
-                        message = "Not connected to #$normalizedChannel yet — message wasn't sent.",
+                        message = "Not connected to #$normalizedChannel yet \u2014 message wasn't sent.",
                         authorColor = null,
                         type = MessageType.SYSTEM,
                         tags = mapOf("client" to "send_guard")
@@ -463,13 +452,16 @@ class ChatService : Service() {
 
         serviceScope.launch {
             try {
-                val ircMessage = if (replyToMessageId != null) {
-                    "@reply-parent-msg-id=$replyToMessageId PRIVMSG #$normalizedChannel :$message"
+                val tags = mutableListOf<String>()
+                if (replyToMessageId != null) tags.add("reply-parent-msg-id=$replyToMessageId")
+                if (nonce != null) tags.add("client-nonce=$nonce")
+
+                val ircMessage = if (tags.isNotEmpty()) {
+                    "@${tags.joinToString(";")} PRIVMSG #$normalizedChannel :$message"
                 } else {
                     "PRIVMSG #$normalizedChannel :$message"
                 }
 
-                // Always send CRLF terminated IRC command.
                 activeSession.sendIrc(ircMessage)
             } catch (e: Exception) {
                 serviceScope.launch {
@@ -499,17 +491,12 @@ class ChatService : Service() {
                         return@forEach
                     }
 
-                    // Detect IRC authentication/error codes that indicate token expiration or invalid credentials
-                    // RFC 1459 numeric error codes:
-                    // 421: ERR_UNKNOWNCOMMAND (often sent after auth failure)
-                    // 671: ERR_PASSWDMISMATCH (wrong password/token)
-                    // 902: ERR_NICKTAKEN (nick in use, can indicate auth issues)
                     if (rawMessage.contains(" 421 ") ||
                         rawMessage.contains(" 671 ") ||
                         rawMessage.contains(" 902 ") ||
                         rawMessage.contains("ERR_PASSWDMISMATCH") ||
                         rawMessage.contains("ERR_UNKNOWNCOMMAND")) {
-                        Log.e(TAG, "IRC authentication error detected: $rawMessage. Token may be invalid or expired.")
+                        Log.e(TAG, "IRC authentication error detected")
                         UserManager.logout()
                         return@forEach
                     }
@@ -517,40 +504,30 @@ class ChatService : Service() {
                     val joinMatch = Regex(":([^!]+)!.* JOIN #").find(rawMessage)
                     val partMatch = Regex(":([^!]+)!.* PART #").find(rawMessage)
 
-                    if (rawMessage.contains(" 001 ")) { // Welcome message: authentication is successful
-                        Log.d(TAG, "Authentication successful. Sending JOIN command.")
+                    if (rawMessage.contains(" 001 ")) { 
                         hasJoinedChannel = false
                         sendIrc("JOIN #$normalizedChannel")
-                        // We'll mark CONNECTED when we actually see that we joined / got room state.
                     } else if (rawMessage.contains("ROOMSTATE") && rawMessage.contains("#$normalizedChannel")) {
-                        // ROOMSTATE is a strong signal that we've successfully joined the channel.
                         hasJoinedChannel = true
                         _connectionState.value = ConnectionState.CONNECTED
                         handleRoomState(rawMessage)
                     } else if (rawMessage.contains("USERSTATE") && rawMessage.contains("#$normalizedChannel")) {
-                        // USERSTATE also indicates we are in the channel.
                         hasJoinedChannel = true
                         _connectionState.value = ConnectionState.CONNECTED
                         handleUserState(rawMessage)
-                    } else if (rawMessage.contains(" 353 ")) { // NAMES list
+                    } else if (rawMessage.contains(" 353 ")) { 
                         val usersPart = rawMessage.substringAfterLast(':')
                         val users = usersPart.trim().split(' ').filter { it.isNotBlank() }
                         currentChatters.addAll(users)
                         _chatters.value = currentChatters.toList().sorted()
-                        Log.d(TAG, "Parsed ${users.size} chatters from NAMES. Total: ${currentChatters.size}")
-                    } else if (rawMessage.contains(" 366 ")) { // End of NAMES list
+                    } else if (rawMessage.contains(" 366 ")) {
                         _chatters.value = currentChatters.toList().sorted()
-                        Log.d(TAG, "End of NAMES list. Current chatter count: ${currentChatters.size}")
-                        // DO NOT CLEAR THE LIST
                     }
                     else if (joinMatch != null) {
                         val username = joinMatch.groupValues[1]
                         if (currentChatters.add(username)) {
                             _chatters.value = currentChatters.toList().sorted()
-                            Log.d(TAG, "User JOINED: $username. Total: ${currentChatters.size}")
                         }
-
-                        // If the JOIN is for the currently logged-in user, we're joined.
                         val currentLogin = UserManager.currentUser?.login
                         if (!currentLogin.isNullOrBlank() && username.equals(currentLogin, ignoreCase = true)) {
                             hasJoinedChannel = true
@@ -560,15 +537,12 @@ class ChatService : Service() {
                         val username = partMatch.groupValues[1]
                         if (currentChatters.remove(username)) {
                             _chatters.value = currentChatters.toList().sorted()
-                            Log.d(TAG, "User PARTED: $username. Total: ${currentChatters.size}")
                         }
                     } else if (rawMessage.contains("USERNOTICE") && rawMessage.contains("msg-id=channel.poll.")) {
                         handlePollNotice(rawMessage)
                     } else if (rawMessage.contains("USERNOTICE")) {
-                        // USERNOTICE lines (subs, raids, announcements) - parse and emit, and log debug info to help troubleshoot
                         try {
                             val parsed = parseMessage(rawMessage)
-                            Log.d(TAG, "USERNOTICE raw=${rawMessage.replace("\n", "\\n")} | parseInfo=${ChatMessageParser.debugParseInfo(rawMessage)} | parsed=$parsed")
                             parsed?.let {
                                 serviceScope.launch { _chatMessages.emit(it) }
                             }
@@ -584,33 +558,7 @@ class ChatService : Service() {
                     }
                     else {
                         val parsed = parseMessage(rawMessage)
-                        if (parsed == null || parsed.message.isBlank()) {
-                            // Log the raw message and parser debug info to help troubleshooting
-                            Log.d(TAG, "Failed to parse chat message. raw=${rawMessage.replace("\n", "\\n")}")
-                            try {
-                                Log.d(TAG, "parseInfo=${ChatMessageParser.debugParseInfo(rawMessage)}")
-                            } catch (_: Exception) { /* ignore debug helper failures */ }
-
-                            if (rawMessage.contains("PRIVMSG")) {
-                                try {
-                                    val simpleMessage = rawMessage.substringAfter("PRIVMSG ").substringAfter(":", "").trim()
-                                    val authorMatch = Regex("^:([^!]+)!").find(rawMessage)
-                                    val author = authorMatch?.groupValues?.get(1)
-                                    if (simpleMessage.isNotBlank()) {
-                                        Log.d(TAG, "Parser fallback used for PRIVMSG; author=$author message=${simpleMessage}")
-                                        val fallback = ChatMessage(
-                                            author = author,
-                                            authorLogin = author,
-                                            message = simpleMessage,
-                                            authorColor = null
-                                        )
-                                        serviceScope.launch { _chatMessages.emit(fallback) }
-                                    }
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "Fallback parse failed: ${e.message}")
-                                }
-                            }
-                        } else {
+                        if (parsed != null && parsed.message.isNotBlank()) {
                             serviceScope.launch { _chatMessages.emit(parsed) }
                         }
                     }
@@ -619,11 +567,9 @@ class ChatService : Service() {
         }
     }
 
-    // --- IRC helpers ---
     private fun normalizeChannelName(channelName: String): String = channelName.trim().removePrefix("#")
 
     private suspend fun DefaultClientWebSocketSession.sendIrc(line: String) {
-        // Twitch IRC expects \r\n and rejects NUL. Avoid double terminators.
         val sanitized = line.replace("\u0000", "").trimEnd('\r', '\n')
         send(Frame.Text("$sanitized\r\n"))
     }
@@ -631,34 +577,28 @@ class ChatService : Service() {
     private fun handleNotice(rawMessage: String) {
         val tagsPart = rawMessage.substringAfter('@').substringBefore(" :")
         val messagePart = rawMessage.substringAfter(":")
-        val tags = tagsPart.split(';').associate {
-            val parts = it.split('=', limit = 2)
-            if (parts.size == 2) parts[0] to parts[1] else parts[0] to ""
-        }
+        val tags = if (rawMessage.startsWith("@")) {
+            tagsPart.split(';').associate {
+                val parts = it.split('=', limit = 2)
+                if (parts.size == 2) parts[0] to parts[1] else parts[0] to ""
+            }
+        } else emptyMap()
+        
         val noticeMsgId = tags["msg-id"] ?: ""
 
-        // Check for authentication failure notices (token expired, etc.)
-        when (noticeMsgId) {
-            "login_authentication_failed", "msg_ratelimit" -> {
-                Log.e(TAG, "Authentication or rate limit error detected: msg-id=$noticeMsgId. Triggering logout.")
-                serviceScope.launch {
-                    UserManager.logout()
-                }
-                return
-            }
-        }
-
-        if (isNoticeSuppressed(noticeMsgId)) {
-            Log.d(TAG, "Suppressing NOTICE msg-id=$noticeMsgId (configured suppression)")
+        if (noticeMsgId == "login_authentication_failed" || noticeMsgId == "msg_ratelimit") {
+            serviceScope.launch { UserManager.logout() }
             return
         }
-        val systemMessage = messagePart
+
+        if (isNoticeSuppressed(noticeMsgId)) return
+        
         serviceScope.launch {
             _chatMessages.emit(
                 ChatMessage(
                 author = null,
                 authorLogin = null,
-                message = systemMessage,
+                message = messagePart,
                 authorColor = null,
                 type = MessageType.SYSTEM,
                 tags = tags
@@ -716,7 +656,7 @@ class ChatService : Service() {
                 try {
                     _poll.value = parsePollFromTags(tags)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse poll data from tags", e)
+                    Log.e(TAG, "Failed to parse poll data")
                 }
             }
             "channel.poll.end" -> {
@@ -727,7 +667,7 @@ class ChatService : Service() {
 
     private fun parsePollFromTags(tags: Map<String, String>): Poll {
         val choices = mutableListOf<PollChoice>()
-        for (i in 1..5) { // Twitch polls have a max of 5 choices
+        for (i in 1..5) {
             val choiceId = tags["poll-choice-${i}-id"] ?: break
             val choiceTitle = tags["poll-choice-${i}-title"] ?: ""
             val choiceVotes = tags["poll-choice-${i}-votes"]?.toIntOrNull() ?: 0
@@ -761,7 +701,6 @@ class ChatService : Service() {
     }
 
     private fun parseMessage(rawMessage: String): ChatMessage? {
-        // Use the centralized parser implementation for consistency and better tag handling
         return ChatMessageParser.parse(rawMessage)
     }
 
@@ -787,7 +726,6 @@ class ChatService : Service() {
                     setBody(json.encodeToString(request))
                 }
             } catch (e: Exception) {
-                // Handle GQL error
             }
         }
     }

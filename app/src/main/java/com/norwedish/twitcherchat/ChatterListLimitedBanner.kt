@@ -26,38 +26,29 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 /**
  * Inline banner shown at the top of the chatter list when the full Helix chatter list is unavailable
  * for a privileged user (moderator / broadcaster). The ViewModel controls when the hint is set.
- *
- * Behavior:
- *  - Shows when ViewModel.chatterListLimitedHint is non-null and the chatter list is visible.
- *  - Auto-hides after 8 seconds (and asks VM to clear the hint).
- *  - Has a dismiss (X) button which clears the hint immediately via the ViewModel.
- *  - Optionally supports a "Learn more" action via onLearnMore.
- *
- * Note: the banner is now restricted to moderators only (do not show to general viewers).
  */
 @Composable
 fun ChatterListLimitedBanner(
     viewModel: ChatViewModel,
     onLearnMore: () -> Unit = {}
 ) {
-    val hint by viewModel.chatterListLimitedHint.collectAsState()
-    val isVisible by viewModel.isChatterListVisible.collectAsState()
-    // Only show banner to moderators (do not show to general viewers)
-    val isModerator by viewModel.isCurrentUserModerator.collectAsState()
+    // Providing explicit initial values fixes the "Cannot infer argument for type parameter T" error
+    val hint by viewModel.chatterListLimitedHint.collectAsState(initial = null)
+    val isVisible by viewModel.isChatterListVisible.collectAsState(initial = false)
+    val isModerator by viewModel.isCurrentUserModerator.collectAsState(initial = false)
 
     if (!isVisible || hint.isNullOrBlank() || !isModerator) return
 
-    // Keep latest onLearnMore lambda stable inside LaunchedEffect
     val currentOnLearnMore by rememberUpdatedState(onLearnMore)
 
-    // Auto-hide after 8 seconds; clear the VM hint when the timeout fires
     LaunchedEffect(hint) {
-        // wait, then clear hint (if still the same)
-        kotlinx.coroutines.delay(8_000)
+        // Auto-hide after 8 seconds
+        delay(8_000)
         viewModel.dismissChatterListHint()
     }
 
