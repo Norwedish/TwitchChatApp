@@ -162,9 +162,12 @@ class ChatViewModel : ViewModel() {
         messageProcessingJob = viewModelScope.launch {
             launch {
                 service.chatMessages.collect { msg ->
-                    val nonce = msg.tags["client-nonce"]
-                    if (nonce != null) {
-                        _messages.update { list -> list.filterNot { it.id == nonce } }
+                    // There is no such thing as waiting for an echo from Twitch in self-sent chats.
+                    // To prevent duplicate messages (since we append our own sent message to the UI instantly),
+                    // we completely ignore any incoming messages from our own username.
+                    val currentUserLogin = UserManager.currentUser?.login
+                    if (currentUserLogin != null && msg.authorLogin.equals(currentUserLogin, ignoreCase = true)) {
+                        return@collect
                     }
                     
                     messageBuffer.add(msg)
@@ -246,16 +249,13 @@ class ChatViewModel : ViewModel() {
     fun onBan(username: String) { modAction("ban", username) }
 
     fun onReply(message: ChatMessage) {
+        // Just set the reply to message. There is no need to prepend @username to the input box,
+        // as sending it with the reply tags is sufficient and prevents duplicate mentions.
         _replyToMessage.value = message
-        _inputMessage.update { currentTFV ->
-            val newMention = "@${message.authorLogin ?: message.author ?: ""} "
-            TextFieldValue(newMention + currentTFV.text.replace(Regex("^@\\w+\\s"), ""), TextRange(newMention.length + currentTFV.text.length))
-        }
     }
 
     fun clearReply() {
         _replyToMessage.value = null
-        _inputMessage.update { TextFieldValue(it.text.replace(Regex("^@\\w+\\s"), ""), TextRange(0)) }
     }
 
     fun onEmoteMenuToggled() {
@@ -281,41 +281,55 @@ class ChatViewModel : ViewModel() {
         if (messageText.isBlank()) return
         val currentUser = UserManager.currentUser ?: return
 
-        val messageId = UUID.randomUUID().toString()
-        val localBadges = mutableListOf<String>()
-        if (currentChannel.equals(currentUser.login, ignoreCase = true)) localBadges.add("broadcaster/1")
+        val isCommand = messageText.startsWith("/")
 
-        val localMessage = ChatMessage(
-            id = messageId,
-            author = currentUser.displayName,
-            authorLogin = currentUser.login,
-            message = messageText,
-            authorColor = currentUser.chatColor ?: "#8A2BE2",
-            emotes = EmoteManager.parseThirdPartyEmotes(messageText),
-            badges = localBadges,
-            type = MessageType.SYSTEM,
-            tags = mapOf("client" to "pending_send")
-        )
+        if (!isCommand) {
+            val messageId = UUID.randomUUID().toString()
+            val localBadges = mutableListOf<String>()
+            
+            // Add self badges based on current local state
+            if (currentChannel.equals(currentUser.login, ignoreCase = true)) {
+                localBadges.add("broadcaster/1")
+            }
+            if (_isCurrentUserModerator.value) {
+                localBadges.add("moderator/1")
+            }
+            if (_isSubscriber.value == true) {
+                localBadges.add("subscriber/1")
+            }
 
-        _messages.update { current -> (current + listOf(localMessage)).takeLast(200) }
+            val replyParent = _replyToMessage.value
+
+            val localMessage = ChatMessage(
+                id = messageId,
+                author = currentUser.displayName,
+                authorLogin = currentUser.login,
+                message = messageText,
+                authorColor = currentUser.chatColor ?: "#8A2BE2",
+                emotes = EmoteManager.parseThirdPartyEmotes(messageText),
+                badges = localBadges,
+                type = MessageType.STANDARD,
+                replyParentMsgId = replyParent?.tags?.get("id") ?: replyParent?.id,
+                replyParentUserLogin = replyParent?.authorLogin ?: replyParent?.author,
+                replyParentMsgBody = replyParent?.message,
+                tags = mapOf("user-id" to currentUser.id) // Adding user-id is extremely safe and helps with badge/icon mapping!
+            )
+
+            _messages.update { current -> (current + listOf(localMessage)).takeLast(200) }
+        }
 
         val replyId = _replyToMessage.value?.tags?.get("id")
 
         try {
-            chatServiceRef?.get()?.sendMessage(currentChannel, messageText, replyId, nonce = messageId)
+            chatServiceRef?.get()?.sendMessage(currentChannel, messageText, replyId)
         } catch (_: Exception) {
-            _messages.update { current ->
-                current.map { if (it.id == messageId) it.copy(message = "Failed to send.", tags = mapOf("client" to "send_failed")) else it }
-            }
-        }
-
-        viewModelScope.launch {
-            delay(10_000)
-            _messages.update { current ->
-                current.map {
-                    if (it.id == messageId && it.tags["client"] == "pending_send") 
-                        it.copy(message = "Confirmation timeout.", tags = mapOf("client" to "send_unconfirmed")) 
-                    else it
+            if (!isCommand) {
+                _messages.update { current ->
+                    current.map {
+                        if (it.message == messageText && it.authorLogin == currentUser.login) {
+                            it.copy(message = "Failed to send: $messageText", type = MessageType.SYSTEM, tags = mapOf("client" to "send_failed"))
+                        } else it
+                    }
                 }
             }
         }
