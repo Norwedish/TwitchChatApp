@@ -27,16 +27,13 @@
             android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
             android:value="com.norwedish.twitcherchat.CastOptionsProvider" />
 
+        <!-- Background chat sync service -->
         <service
             android:name=".ChatService"
             android:exported="false"
             android:foregroundServiceType="dataSync"/>
 
-        <service
-            android:name=".WhisperService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync"/>
-
+        <!-- Main launcher activity -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

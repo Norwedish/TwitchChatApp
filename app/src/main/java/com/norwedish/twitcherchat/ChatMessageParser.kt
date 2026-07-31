@@ -31,6 +31,7 @@ object ChatMessageParser {
             var finalMessage = ""
 
             if (tagsPart.isNotEmpty()) {
+                // Decode IRC tags and derive display attributes + message category.
                 tags = tagsPart.split(';').associate {
                     val parts = it.split('=', limit = 2)
                     if (parts.size == 2) parts[0] to unescapeTagValue(parts[1]) else parts[0] to ""
@@ -86,7 +87,7 @@ object ChatMessageParser {
                 }
             }
 
-            // Map emote indices to finalMessage
+            // Re-map emote positions so they match the final rendered message text.
             val parsedTwitchEmotes = mutableListOf<ParsedEmote>()
             if (twitchEmotes.isNotEmpty()) {
                 for (t in twitchEmotes) {
@@ -131,11 +132,12 @@ object ChatMessageParser {
             var finalColor = color ?: "#8A2BE2"
             if (finalColor.equals("#000000", ignoreCase = true)) finalColor = "#FFFFFF"
 
+            // USERNOTICE can expose the sender through different tags; pick first non-empty candidate.
             val (authorLoginForMsg, author) = if (command == "USERNOTICE") {
                 val loginCandidates = listOf("login", "msg-param-sender-login", "msg-param-gifter-login", "msg-param-recipient-login", "msg-param-user-login")
                 val displayNameCandidates = listOf("display-name", "msg-param-sender-display-name", "msg-param-gifter-display-name", "msg-param-recipient-display-name")
                 val foundLogin = loginCandidates.asSequence().mapNotNull { tags[it]?.takeIf { it.isNotEmpty() } }.firstOrNull()
-                var foundName = displayNameCandidates.asSequence().mapNotNull { tags[it]?.takeIf { it.isNotEmpty() } }.firstOrNull() ?: foundLogin
+                val foundName = displayNameCandidates.asSequence().mapNotNull { tags[it]?.takeIf { it.isNotEmpty() } }.firstOrNull() ?: foundLogin
                 Pair(foundLogin, foundName)
             } else {
                 Pair(loginName.takeIf { it.isNotEmpty() }, displayName?.takeIf { it.isNotEmpty() } ?: loginName.takeIf { it.isNotEmpty() })
@@ -166,11 +168,5 @@ object ChatMessageParser {
             .replace("\\r", "\r")
             .replace("\\n", "\n")
             .replace("\\\\", "\\")
-    }
-
-    fun debugParseInfo(rawMessage: String): String {
-        val pattern = Regex("^(?:@([^ ]+) )?(?::([^! ]+)(?:![^ ]+)? )?([^ ]+)(?: (?!:)([^ ]+))?(?: :(.+))?$")
-        val match = pattern.find(rawMessage) ?: return "NO_MATCH"
-        return "MATCH: command=${match.groupValues[3]}"
     }
 }

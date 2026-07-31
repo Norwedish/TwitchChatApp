@@ -1,8 +1,6 @@
 package com.norwedish.twitcherchat
 
-import android.util.Log
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -19,8 +17,7 @@ import java.util.Collections
 import java.util.UUID
 
 class ChatViewModel : ViewModel() {
-    companion object { private const val TAG = "ChatViewModel" }
-
+    // Core chat stream state used by the message list and input area
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
@@ -40,11 +37,11 @@ class ChatViewModel : ViewModel() {
         FFZ("FFZ", EmoteProvider.FRANKENFACEZ)
     }
 
+    // Emote picker catalog + tab filtering
     private val _selectedEmoteTab = MutableStateFlow(EmoteTab.TWITCH)
     val selectedEmoteTab: StateFlow<EmoteTab> = _selectedEmoteTab.asStateFlow()
 
     private val _availableEmotes = MutableStateFlow<List<Emote>>(emptyList())
-    val availableEmotes: StateFlow<List<Emote>> = _availableEmotes.asStateFlow()
 
     private val _visibleEmotes = MutableStateFlow<List<Emote>>(emptyList())
     val visibleEmotes: StateFlow<List<Emote>> = _visibleEmotes.asStateFlow()
@@ -75,6 +72,7 @@ class ChatViewModel : ViewModel() {
         refreshVisibleEmotes()
     }
 
+    // Viewer/moderation + stream metadata shown in overlays/sheets
     private val _isCurrentUserModerator = MutableStateFlow(false)
     val isCurrentUserModerator: StateFlow<Boolean> = _isCurrentUserModerator.asStateFlow()
 
@@ -90,6 +88,7 @@ class ChatViewModel : ViewModel() {
     private val _poll = MutableStateFlow<Poll?>(null)
     val poll: StateFlow<Poll?> = _poll.asStateFlow()
 
+    // Chatter list bottom-sheet state
     private val _isChatterListVisible = MutableStateFlow(false)
     val isChatterListVisible: StateFlow<Boolean> = _isChatterListVisible.asStateFlow()
 
@@ -98,9 +97,6 @@ class ChatViewModel : ViewModel() {
 
     private val _chatters = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     val chatters: StateFlow<Map<String, List<String>>> = _chatters.asStateFlow()
-
-    private val _chatterListLimitedHint = MutableStateFlow<String?>(null)
-    val chatterListLimitedHint: StateFlow<String?> = _chatterListLimitedHint.asStateFlow()
 
     private val _userSuggestions = MutableStateFlow<List<String>>(emptyList())
     val userSuggestions: StateFlow<List<String>> = _userSuggestions.asStateFlow()
@@ -229,20 +225,17 @@ class ChatViewModel : ViewModel() {
                         val grouped = mutableMapOf("Broadcaster" to helix.broadcaster.map { it.userName }, "Moderators" to helix.moderators.map { it.userName }, "VIPs" to helix.vips.map { it.userName }, "Viewers" to helix.viewers.map { it.userName })
                         _chatters.value = grouped
                         _isChattersLoading.value = false
-                        _chatterListLimitedHint.value = null
                         return@launch
                     }
                 }
                 _chatters.value = mapOf("Viewers" to (chatServiceRef?.get()?.chatters?.value ?: emptyList()))
-                _chatterListLimitedHint.value = "Full chatter list unavailable; showing local view only."
             } catch (_: Exception) {}
             _isChattersLoading.value = false
         }
     }
 
     fun onChatterListRequested() { _isChatterListVisible.value = true; fetchChatters() }
-    fun onChatterListDismissed() { _isChatterListVisible.value = false; _chatterListLimitedHint.value = null }
-    fun dismissChatterListHint() { _chatterListLimitedHint.value = null }
+    fun onChatterListDismissed() { _isChatterListVisible.value = false }
     fun onShowUserProfile(message: ChatMessage) { _selectedUserForProfile.value = message }
     fun onDismissUserProfile() { _selectedUserForProfile.value = null }
     fun onTimeout(username: String) { modAction("timeout", username) }
