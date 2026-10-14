@@ -52,6 +52,9 @@ object BadgeManager {
     // Cache: broadcasterId (or "global") -> Map<"set_id/version", url>
     private val badgeCache = ConcurrentHashMap<String, ConcurrentHashMap<String, String>>()
 
+    // Per-user badge keys cache: login -> List<"set_id/version">
+    private val userBadgeKeys = ConcurrentHashMap<String, MutableList<String>>()
+
     private var globalLoaded = false
 
     /**
@@ -145,5 +148,45 @@ object BadgeManager {
         if (broadcasterId == null) return false
         val fullKey = if (badgeString.contains("/")) badgeString else "$badgeString/1"
         return badgeCache[broadcasterId]?.containsKey(fullKey) ?: false
+    }
+
+    /**
+     * Get all badge keys for a channel. Returns list of "set_id/version" strings.
+     */
+    fun getAllBadgeKeys(broadcasterId: String): List<String> {
+        if (broadcasterId.isBlank()) return emptyList()
+        val map = badgeCache[broadcasterId] ?: return emptyList()
+        return map.keys.toList()
+    }
+
+    /**
+     * Get all badge keys for global badges. Returns list of "set_id/version" strings.
+     */
+    fun getAllGlobalBadgeKeys(): List<String> {
+        val map = badgeCache["global"] ?: return emptyList()
+        return map.keys.toList()
+    }
+
+    /**
+     * Store badge keys for a user by their login name.
+     */
+    fun storeUserBadges(userLogin: String, badgeKeys: List<String>) {
+        if (badgeKeys.isEmpty()) return
+        synchronized(userBadgeKeys) {
+            val existing = userBadgeKeys[userLogin]
+            if (existing != null && existing.isNotEmpty()) {
+                // Already have badges for this user
+                return
+            }
+            userBadgeKeys[userLogin] = mutableListOf(*badgeKeys.toTypedArray())
+            Log.d(TAG, "Stored ${badgeKeys.size} badge keys for user $userLogin")
+        }
+    }
+
+    /**
+     * Get stored badge keys for a user by their login name.
+     */
+    fun getUserBadgeKeys(userLogin: String): List<String> {
+        return userBadgeKeys[userLogin] ?: emptyList()
     }
 }

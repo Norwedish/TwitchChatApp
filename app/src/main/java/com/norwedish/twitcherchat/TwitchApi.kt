@@ -518,6 +518,45 @@ object TwitchApi {
         }
     }
 
+    @Serializable
+    data class ChatBadgeVersion(
+        val id: String,
+        @SerialName("image_url_1x") val imageUrl1x: String,
+        @SerialName("image_url_2x") val imageUrl2x: String,
+        @SerialName("image_url_4x") val imageUrl4x: String
+    )
+
+    @Serializable
+    data class ChatBadgeSet(
+        val set_id: String,
+        val categories: List<String>,
+        @SerialName("last_updated") val lastUpdated: String?,
+        val versions: List<ChatBadgeVersion>
+    )
+
+    @Serializable
+    data class GetChatBadgesResponse(
+        val data: List<ChatBadgeSet>? = null,
+        @SerialName("effective_min_width") val effectiveMinWidth: Int? = null,
+        @SerialName("effective_max_width") val effectiveMaxWidth: Int? = null
+    )
+
+    suspend fun getUserChatBadges(userId: String, token: String, clientId: String): List<ChatBadgeSet> {
+        return try {
+            val response: GetChatBadgesResponse = client.get("https://api.twitch.tv/helix/chat/badges") {
+                url { parameters.append("broadcaster_id", userId) }
+                headers {
+                    append("Authorization", "Bearer $token")
+                    append("Client-Id", clientId)
+                }
+            }.body()
+            response.data ?: emptyList()
+        } catch (e: Exception) {
+            Log.e("TwitchApi", "Failed to get user chat badges for userId=$userId", e)
+            emptyList()
+        }
+    }
+
     // Fetch the list of broadcaster IDs the user follows (paginated)
     suspend fun getFollowedChannelIds(userId: String, token: String, clientId: String): List<String> {
         val allIds = mutableListOf<String>()

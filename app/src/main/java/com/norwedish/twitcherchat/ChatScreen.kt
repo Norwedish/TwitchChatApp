@@ -983,9 +983,19 @@ fun ChatMessageItem(
         }
     }
 
+    // Check if someone is replying to the current user's own message (red highlight for replies TO our messages only)
+    val currentUserLogin = UserManager.currentUser?.login ?: ""
+    val isReplyToOwnMessage = remember(message.replyParentMsgId, message.tags) {
+        // Only highlight if: this is a reply AND the replied-to user is the current user
+        message.replyParentMsgId != null &&
+        !message.tags.isNullOrEmpty() &&
+        message.tags["reply-parent-user-id"] == currentUserLogin
+    }
+
     val highlightColor = when {
         isDeleted -> MaterialTheme.colorScheme.error.copy(alpha = 0.2f)
-        isMentioned -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+        isMentioned -> Color(0xFFE53E3E).copy(alpha = 0.15f) // Red highlight for mentions (text stays blue in HighlightedTextToken)
+        isReplyToOwnMessage -> Color(0xFFE53E3E).copy(alpha = 0.15f) // Red highlight for replies to own messages
         message.type == MessageType.SUBSCRIPTION -> MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
         message.type == MessageType.RAID -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.1f)
         message.type == MessageType.ANNOUNCEMENT -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.1f)
@@ -1044,7 +1054,17 @@ fun ChatMessageItem(
                 .padding(vertical = 4.dp, horizontal = 8.dp)
         ) {
             message.replyParentMsgBody?.let { parentMessageBody ->
-                val parentAuthor = message.replyParentUserLogin ?: "Unknown User"
+                // Use replyParentDisplayName if available, otherwise try to resolve from known users or fallback to login
+                val parentAuthor = message.replyParentDisplayName ?: run {
+                    // Try to match the login against current user's display name
+                    val currentLogin = UserManager.currentUser?.login?.lowercase()
+                    val currentDisplayName = UserManager.currentUser?.displayName
+                    if (currentLogin != null && currentDisplayName != null && message.replyParentUserLogin?.lowercase() == currentLogin) {
+                        currentDisplayName
+                    } else {
+                        message.replyParentUserLogin ?: "Unknown User"
+                    }
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically

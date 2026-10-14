@@ -1,5 +1,7 @@
 package com.norwedish.twitcherchat
 
+import android.util.Log
+
 /**
  * Centralized parser for raw IRC messages from Twitch chat. Produces ChatMessage objects consumed by UI.
  */
@@ -8,19 +10,39 @@ object ChatMessageParser {
     // Expose a pure function that parses raw IRC chat lines into ChatMessage objects.
     // This is pure Kotlin and has no Android dependencies so it can be unit tested on the JVM.
     fun parse(rawMessage: String): ChatMessage? {
-        // Accept prefixes both with and without the '!user@host' part (e.g. ':nick!user@host' and ':tmi.twitch.tv')
-        val pattern = Regex("^(?:@([^ ]+) )?(?::([^! ]+)(?:![^ ]+)? )?([^ ]+)(?: (?!:)([^ ]+))?(?: :(.+))?$")
-        val match = pattern.find(rawMessage)
+        Log.d("ChatMessageParser", "PARSE INPUT: $rawMessage")
+        
+        // Handle PRIVMSG and USERNOTICE messages from Twitch IRC.
+        // Format: @tags :sender!user@host or :tmi.twitch.tv COMMAND #channel :message
+
+        val tagsPart = if (rawMessage.startsWith("@")) {
+            rawMessage.substringAfter('@').substringBefore(" :")
+        } else ""
+
+        // Split on " :" to separate tags from sender+command+message
+        val parts = rawMessage.split(" :", limit = 2)
+        val afterTags = if (parts.size >= 2) parts[1] else rawMessage
+
+        Log.d("ChatMessageParser", "afterTags='$afterTags'")
+
+        // Pattern: sender (with optional !user@host) COMMAND #channel :message
+        val pattern = Regex("(\\S+)(?:![^ ]+)? (PRIVMSG|USERNOTICE) (#\\S+) :(.*\$)")
+        val match = pattern.find(afterTags)
 
         if (match != null) {
-            val command = match.groupValues[3]
+            val senderName = match.groupValues[1]
+            val command = match.groupValues[2]
+            val channel = match.groupValues[3]
+            val userMessage = match.groupValues[4]
+
+            Log.d("ChatMessageParser", "sender='$senderName', cmd='$command', msg='$userMessage'")
+
             if (command != "PRIVMSG" && command != "USERNOTICE") {
                 return null
             }
 
-            val tagsPart = match.groupValues[1]
-            val loginName = match.groupValues[2]
-            val userMessage = match.groupValues[5]
+            // Twitch echoes have :tmi.twitch.tv as sender - extract author from tags instead
+            val isTwitchEcho = senderName == "tmi.twitch.tv"
 
             var color: String? = null
             var displayName: String? = null
@@ -140,7 +162,9 @@ object ChatMessageParser {
                 val foundName = displayNameCandidates.asSequence().mapNotNull { tags[it]?.takeIf { it.isNotEmpty() } }.firstOrNull() ?: foundLogin
                 Pair(foundLogin, foundName)
             } else {
-                Pair(loginName.takeIf { it.isNotEmpty() }, displayName?.takeIf { it.isNotEmpty() } ?: loginName.takeIf { it.isNotEmpty() })
+                // For PRIVMSG, extract login from tags (works for both echo and regular messages)
+                val loginFromTags = tags["login"] ?: tags["user-id"] ?: senderName.takeIf { it != "tmi.twitch.tv" }
+                Pair(loginFromTags?.lowercase(), displayName?.takeIf { it.isNotEmpty() } ?: loginFromTags?.takeIf { it != null })
             }
 
             return ChatMessage(
@@ -155,6 +179,7 @@ object ChatMessageParser {
                 tags = tags,
                 replyParentMsgId = tags["reply-parent-msg-id"],
                 replyParentUserLogin = tags["reply-parent-user-login"],
+                replyParentDisplayName = tags["reply-parent-user-login"],
                 replyParentMsgBody = tags["reply-parent-msg-body"]
             )
         }

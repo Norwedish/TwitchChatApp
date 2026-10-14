@@ -158,14 +158,8 @@ class ChatViewModel : ViewModel() {
         messageProcessingJob = viewModelScope.launch {
             launch {
                 service.chatMessages.collect { msg ->
-                    // There is no such thing as waiting for an echo from Twitch in self-sent chats.
-                    // To prevent duplicate messages (since we append our own sent message to the UI instantly),
-                    // we completely ignore any incoming messages from our own username.
-                    val currentUserLogin = UserManager.currentUser?.login
-                    if (currentUserLogin != null && msg.authorLogin.equals(currentUserLogin, ignoreCase = true)) {
-                        return@collect
-                    }
-                    
+                    // Now we accept all messages including our own echoes from Twitch.
+                    // The manual local addition was removed, so every message flows through the parser normally.
                     messageBuffer.add(msg)
                     try {
                         if (msg.authorLogin.equals(UserManager.currentUser?.login, ignoreCase = true)) {
@@ -276,22 +270,30 @@ class ChatViewModel : ViewModel() {
 
         val isCommand = messageText.startsWith("/")
 
+        // Add the message locally so it appears in the chat immediately.
+        // Twitch IRC does NOT send back PRIVMSG echoes of our own messages,
+        // so we must add them here. (USERSTATE events are not PRIVMSG and won't match.)
         if (!isCommand) {
             val messageId = UUID.randomUUID().toString()
-            val localBadges = mutableListOf<String>()
-            
-            // Add self badges based on current local state
-            if (currentChannel.equals(currentUser.login, ignoreCase = true)) {
-                localBadges.add("broadcaster/1")
-            }
-            if (_isCurrentUserModerator.value) {
-                localBadges.add("moderator/1")
-            }
-            if (_isSubscriber.value == true) {
-                localBadges.add("subscriber/1")
-            }
-
             val replyParent = _replyToMessage.value
+
+            // Try to get cached badges for this user from USERSTATE events
+            var localBadges: List<String> = BadgeManager.getUserBadgeKeys(currentUser.login)
+
+            // If no cached badges yet, try to infer from what we know
+            if (localBadges.isEmpty()) {
+                localBadges = buildList {
+                    if (currentChannel.equals(currentUser.login, ignoreCase = true)) {
+                        add("broadcaster/1")
+                    }
+                    if (_isCurrentUserModerator.value) {
+                        add("moderator/1")
+                    }
+                    if (_isSubscriber.value == true) {
+                        add("subscriber/1")
+                    }
+                }
+            }
 
             val localMessage = ChatMessage(
                 id = messageId,
@@ -305,7 +307,7 @@ class ChatViewModel : ViewModel() {
                 replyParentMsgId = replyParent?.tags?.get("id") ?: replyParent?.id,
                 replyParentUserLogin = replyParent?.authorLogin ?: replyParent?.author,
                 replyParentMsgBody = replyParent?.message,
-                tags = mapOf("user-id" to currentUser.id) // Adding user-id is extremely safe and helps with badge/icon mapping!
+                tags = mapOf("user-id" to currentUser.id)
             )
 
             _messages.update { current -> (current + listOf(localMessage)).takeLast(200) }

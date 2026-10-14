@@ -88,6 +88,7 @@ data class ChatMessage(
     val tags: Map<String, String> = emptyMap(),
     val replyParentMsgId: String? = null,
     val replyParentUserLogin: String? = null,
+    val replyParentDisplayName: String? = null,
     val replyParentMsgBody: String? = null
 )
 
@@ -485,6 +486,7 @@ class ChatService : Service() {
         for (frame in incoming) {
             if (frame is Frame.Text) {
                 val messageText = frame.readText().trim()
+                Log.d(TAG, "RAW IRC MESSAGE: $messageText")
                 messageText.split("\r\n").forEach { rawMessage ->
                     if (rawMessage.startsWith("PING")) {
                         sendIrc("PONG :tmi.twitch.tv")
@@ -635,6 +637,16 @@ class ChatService : Service() {
             val parts = it.split('=', limit = 2)
             if (parts.size == 2) parts[0] to parts[1] else parts[0] to ""
         }
+
+        // Extract badges for this user from USERSTATE event
+        val badgesTag = tags["badges"] ?: ""
+        if (badgesTag.isNotBlank()) {
+            val badgeKeys = badgesTag.split(",").filter { it.isNotBlank() }.toList()
+            val senderName = tags["display-name"] ?: tags["user-id"] ?: ""
+            BadgeManager.storeUserBadges(senderName, badgeKeys)
+            Log.d(TAG, "Cached ${badgeKeys.size} badges for user $senderName from USERSTATE")
+        }
+
         val badges = tags["badges"]?.split(',') ?: emptyList()
         val isMod = badges.any { it.startsWith("moderator") || it.startsWith("broadcaster") }
         if (isMod != _isCurrentUserModerator.value) {
@@ -701,7 +713,14 @@ class ChatService : Service() {
     }
 
     private fun parseMessage(rawMessage: String): ChatMessage? {
-        return ChatMessageParser.parse(rawMessage)
+        Log.d(TAG, "PARSING IRC MESSAGE: $rawMessage")
+        val result = ChatMessageParser.parse(rawMessage)
+        if (result != null) {
+            Log.d(TAG, "PARSED OK: author=${result.authorLogin} message='${result.message}' type=${result.type}")
+        } else {
+            Log.d(TAG, "PARSE FAILED or returned null")
+        }
+        return result
     }
 
 
