@@ -14,6 +14,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
+import android.webkit.WebView
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.ImageDecoderDecoder
@@ -28,10 +29,15 @@ class MyApplication : Application(), ImageLoaderFactory {
         createNotificationChannel()
         // Initialize CastManager so it's ready to handle casting requests
         CastManager.initialize(this)
+        // Allow remote debugging of the in-app Twitch login WebView in debug builds only.
+        if (BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
     }
 
     override fun newImageLoader(): ImageLoader {
         return ImageLoader.Builder(this)
+            .crossfade(true)
             .memoryCache {
                 MemoryCache.Builder(this)
                     .maxSizePercent(0.25)

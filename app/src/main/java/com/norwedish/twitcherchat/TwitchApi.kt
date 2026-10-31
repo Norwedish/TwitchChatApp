@@ -16,6 +16,12 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.*
 
+/**
+ * Thrown when Twitch answers with a non-success HTTP status. Callers can use [status] to
+ * distinguish an expired session (401) from a rate limit (429) or a server error (5xx).
+ */
+class TwitchApiException(val status: Int, message: String) : Exception(message)
+
 // --- Data Classes (top-level so other modules can reference them) ---
 
 @Serializable
@@ -197,6 +203,21 @@ object TwitchApi {
         install(WebSockets)
     }
 
+    /**
+     * Throws [TwitchApiException] for non-2xx responses, with Twitch's error message in the
+     * exception text so the UI can tell the user what actually went wrong.
+     */
+    private suspend fun HttpResponse.requireSuccess(what: String): HttpResponse {
+        if (status.isSuccess()) return this
+        val bodyText = runCatching { bodyAsText() }.getOrDefault("")
+        Log.e("TwitchApi", "$what failed: HTTP ${status.value} - ${bodyText.take(500)}")
+        throw TwitchApiException(
+            status.value,
+            "$what failed (HTTP ${status.value})" +
+                if (bodyText.isNotBlank()) ": ${bodyText.take(200)}" else ""
+        )
+    }
+
     // Returns true if the user is subscribed to the broadcaster, false if not, or null if unknown/error.
     suspend fun isUserSubscribed(userId: String, broadcasterId: String, token: String, clientId: String): Boolean? {
         if (userId.isBlank() || broadcasterId.isBlank()) return null
@@ -225,22 +246,23 @@ object TwitchApi {
         val gqlClientId = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 
         val playbackAccessToken = try {
-            val gqlRequest = """{
-                "operationName": "PlaybackAccessToken",
-                "variables": {
-                    "isLive": true,
-                    "login": "$channelName",
-                    "isVod": false,
-                    "vodID": "",
-                    "playerType": "embed"
-                },
-                "extensions": {
-                    "persistedQuery": {
-                        "version": 1,
-                        "sha256Hash": "0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712"
+            // Build the JSON with kotlinx.serialization so a channel name can never break/inject the body
+            val gqlRequest = buildJsonObject {
+                put("operationName", "PlaybackAccessToken")
+                putJsonObject("variables") {
+                    put("isLive", true)
+                    put("login", channelName)
+                    put("isVod", false)
+                    put("vodID", "")
+                    put("playerType", "embed")
+                }
+                putJsonObject("extensions") {
+                    putJsonObject("persistedQuery") {
+                        put("version", 1)
+                        put("sha256Hash", "0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712")
                     }
                 }
-            }"""
+            }.toString()
 
             val response: PlaybackAccessTokenResponse = client.post("https://gql.twitch.tv/gql") {
                 header("Client-ID", gqlClientId)
@@ -268,6 +290,83 @@ object TwitchApi {
                 append("allow_audio_only", "true")
             }.formUrlEncode()
             url + "?" + params
+        }
+    }
+
+    /**
+     * Fetches all channels the user follows (paginated), including login and display name.
+     * Used to register streamers with EventSub / intelligent polling.
+     */
+    suspend fun getFollowedChannels(userId: String, token: String, clientId: String): List<FollowedChannel> {
+        val all = mutableListOf<FollowedChannel>()
+        var cursor: String? = null
+        val seenCursors = mutableSetOf<String>()
+        try {
+            while (true) {
+                val httpResponse = client.get("https://api.twitch.tv/helix/channels/followed") {
+                    url {
+                        parameters.append("user_id", userId)
+                        parameters.append("first", "100")
+                        cursor?.let { parameters.append("after", it) }
+                    }
+                    headers {
+                        append("Authorization", "Bearer $token")
+                        append("Client-Id", clientId)
+                    }
+                }
+                httpResponse.requireSuccess("Loading your followed channels")
+
+                val response: GetFollowedChannelsResponse = httpResponse.body()
+                response.data?.let { all.addAll(it) }
+                Log.d(
+                    "TwitchApi",
+                    "getFollowedChannels page: ${response.data?.size ?: 0} channel(s), cursor=${response.pagination?.cursor ?: "-"}"
+                )
+
+                val next = response.pagination?.cursor
+                if (next.isNullOrEmpty() || !seenCursors.add(next)) break
+                cursor = next
+            }
+            Log.d("TwitchApi", "getFollowedChannels: user=$userId -> ${all.size} channel(s)")
+        } catch (e: TwitchApiException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("TwitchApi", "Failed to get followed channels: ${e.message}")
+        }
+        return all
+    }
+
+    /**
+     * Creates a websocket EventSub subscription (stream.online) for a broadcaster on the given session.
+     */
+    suspend fun createEventSubSubscription(sessionId: String, broadcasterId: String, token: String, clientId: String): Boolean {
+        return try {
+            val body = buildJsonObject {
+                put("type", "stream.online")
+                put("version", "1")
+                putJsonObject("condition") {
+                    put("broadcaster_user_id", broadcasterId)
+                }
+                putJsonObject("transport") {
+                    put("method", "websocket")
+                    put("session_id", sessionId)
+                }
+            }.toString()
+            val response = client.post("https://api.twitch.tv/helix/eventsub/subscriptions") {
+                headers {
+                    append("Authorization", "Bearer $token")
+                    append("Client-Id", clientId)
+                }
+                contentType(ContentType.Application.Json)
+                setBody(body)
+            }
+            if (!response.status.isSuccess()) {
+                Log.w("TwitchApi", "EventSub subscription failed for $broadcasterId: HTTP ${response.status.value}")
+            }
+            response.status.isSuccess()
+        } catch (e: Exception) {
+            Log.w("TwitchApi", "Failed to create EventSub subscription for $broadcasterId: ${e.message}")
+            false
         }
     }
 
@@ -426,51 +525,62 @@ object TwitchApi {
     suspend fun getFollowedStreams(userId: String, token: String, clientId: String): List<FollowedStream> {
         val allStreams = mutableListOf<FollowedStream>()
         var cursor: String? = null
-        try {
-            do {
-                val response: GetFollowedStreamsResponse = client.get("https://api.twitch.tv/helix/streams/followed") {
-                    url {
-                        parameters.append("user_id", userId)
-                        parameters.append("first", "100") // Fetch max results per page
-                        cursor?.let { parameters.append("after", it) }
-                    }
-                    headers {
-                        append("Authorization", "Bearer $token")
-                        append("Client-Id", clientId)
-                    }
-                }.body()
-
-                if (response.data != null) {
-                    allStreams.addAll(response.data)
+        val seenCursors = mutableSetOf<String>()
+        while (true) {
+            val httpResponse = client.get("https://api.twitch.tv/helix/streams/followed") {
+                url {
+                    parameters.append("user_id", userId)
+                    parameters.append("first", "100") // Fetch max results per page
+                    cursor?.let { parameters.append("after", it) }
                 }
-                cursor = response.pagination?.cursor
-
-            } while (cursor != null)
-        } catch (e: Exception) {
-            Log.e("TwitchApi", "Failed to get followed streams", e)
-        }
-        return allStreams
-    }
-
-    suspend fun getCurrentUser(token: String, clientId: String): TwitchUser? {
-        return try {
-            val response: GetUsersResponse = client.get("https://api.twitch.tv/helix/users") {
                 headers {
                     append("Authorization", "Bearer $token")
                     append("Client-Id", clientId)
                 }
-            }.body()
-            response.data?.firstOrNull()
-        } catch (e: Exception) {
-            Log.e("TwitchApi", "Failed to get current user", e)
-            null
+            }
+
+            // Do NOT swallow errors here: an empty list would make the home screen claim
+            // "no live channels" while the real problem is an expired token / rate limit.
+            httpResponse.requireSuccess("Loading your live followed channels")
+
+            val response: GetFollowedStreamsResponse = httpResponse.body()
+            response.data?.let { allStreams.addAll(it) }
+            Log.d(
+                "TwitchApi",
+                "getFollowedStreams page: ${response.data?.size ?: 0} live " +
+                    "(${response.data?.joinToString { it.userLogin }.orEmpty()}), " +
+                    "cursor=${response.pagination?.cursor ?: "-"}"
+            )
+
+            val next = response.pagination?.cursor
+            // An empty or repeating cursor means "no more pages"; without this guard a
+            // misbehaving cursor would loop forever and burn through the rate limit.
+            if (next.isNullOrEmpty() || !seenCursors.add(next)) break
+            cursor = next
         }
+        Log.d(
+            "TwitchApi",
+            "getFollowedStreams: user=$userId -> ${allStreams.size} live channel(s)"
+        )
+        return allStreams
+    }
+
+    suspend fun getCurrentUser(token: String, clientId: String): TwitchUser? {
+        val httpResponse = client.get("https://api.twitch.tv/helix/users") {
+            headers {
+                append("Authorization", "Bearer $token")
+                append("Client-Id", clientId)
+            }
+        }
+        httpResponse.requireSuccess("Loading your Twitch profile")
+        val response: GetUsersResponse = httpResponse.body()
+        return response.data?.firstOrNull()
     }
 
     suspend fun getUsers(userIds: List<String>, token: String, clientId: String): List<TwitchUser> {
         if (userIds.isEmpty()) return emptyList()
         return try {
-            val response: GetUsersResponse = client.get("https://api.twitch.tv/helix/users") {
+            val httpResponse = client.get("https://api.twitch.tv/helix/users") {
                 url {
                     userIds.forEach { parameter("id", it) }
                 }
@@ -478,8 +588,12 @@ object TwitchApi {
                     append("Authorization", "Bearer $token")
                     append("Client-Id", clientId)
                 }
-            }.body()
+            }
+            httpResponse.requireSuccess("Loading streamer profiles")
+            val response: GetUsersResponse = httpResponse.body()
             response.data ?: emptyList()
+        } catch (e: TwitchApiException) {
+            throw e
         } catch (e: Exception) {
             Log.e("TwitchApi", "Failed to get users for ids=${userIds.joinToString()}", e)
             emptyList()
@@ -627,25 +741,23 @@ object TwitchApi {
     suspend fun getStreamsForUsers(userIds: List<String>, token: String, clientId: String): List<FollowedStream> {
         if (userIds.isEmpty()) return emptyList()
         val result = mutableListOf<FollowedStream>()
-        try {
-            // Twitch allows up to 100 user_id parameters per request
-            val batches = userIds.chunked(100)
-            for (batch in batches) {
-                val response: GetStreamsResponse = client.get("https://api.twitch.tv/helix/streams") {
-                    url {
-                        batch.forEach { parameter("user_id", it) }
-                    }
-                    headers {
-                        append("Authorization", "Bearer $token")
-                        append("Client-Id", clientId)
-                    }
-                }.body()
-                if (response.data != null) {
-                    result.addAll(response.data)
+        // Twitch allows up to 100 user_id parameters per request
+        val batches = userIds.chunked(100)
+        for (batch in batches) {
+            val httpResponse = client.get("https://api.twitch.tv/helix/streams") {
+                url {
+                    batch.forEach { parameter("user_id", it) }
+                }
+                headers {
+                    append("Authorization", "Bearer $token")
+                    append("Client-Id", clientId)
                 }
             }
-        } catch (e: Exception) {
-            Log.e("TwitchApi", "Failed to get streams for users", e)
+            // Propagate failures: returning an empty list here would make every polled
+            // streamer look offline and fire false "went offline" events.
+            httpResponse.requireSuccess("Loading stream status")
+            val response: GetStreamsResponse = httpResponse.body()
+            response.data?.let { result.addAll(it) }
         }
         return result
     }

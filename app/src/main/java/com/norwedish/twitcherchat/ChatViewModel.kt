@@ -158,8 +158,8 @@ class ChatViewModel : ViewModel() {
         messageProcessingJob = viewModelScope.launch {
             launch {
                 service.chatMessages.collect { msg ->
-                    // Now we accept all messages including our own echoes from Twitch.
-                    // The manual local addition was removed, so every message flows through the parser normally.
+                    // Accept all incoming messages. Twitch does not echo our own PRIVMSGs,
+                    // so this cannot duplicate the local message added in sendMessage().
                     messageBuffer.add(msg)
                     try {
                         if (msg.authorLogin.equals(UserManager.currentUser?.login, ignoreCase = true)) {

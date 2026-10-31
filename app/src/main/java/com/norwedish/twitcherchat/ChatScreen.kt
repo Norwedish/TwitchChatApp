@@ -7,6 +7,7 @@ package com.norwedish.twitcherchat
  * This file contains composables and helper UI types used by the chat screen.
  */
 
+import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -16,11 +17,13 @@ import android.content.IntentFilter
 import android.os.IBinder
 import android.os.Build
 import android.util.Log
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -33,26 +36,30 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.pullrefresh.PullRefreshIndicator
-import androidx.compose.material.pullrefresh.pullRefresh
-import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.SpanStyle
@@ -69,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
+import coil.request.ImageRequest
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -80,6 +88,7 @@ import androidx.core.graphics.toColorInt
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
+import com.norwedish.twitcherchat.ui.theme.LiveRed
 
 // Define sealed classes for our message tokens at the top level
 sealed class MessageToken
@@ -88,7 +97,7 @@ data class EmoteToken(val code: String, val url: String) : MessageToken()
 data class UrlToken(val url: String) : MessageToken()
 
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalMaterialApi::class, androidx.compose.ui.text.ExperimentalTextApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, androidx.compose.ui.text.ExperimentalTextApi::class)
 /**
  * Primary composable that shows a chat for a given channel. Manages cast listeners, binds to the
  * ChatService and observes ChatViewModel state to render messages and input controls.
@@ -128,6 +137,15 @@ fun ChatScreen(
             context.unregisterReceiver(logoutReceiver)
         }
     }
+    // Keep the screen on while chatting (cleared when leaving this screen)
+    DisposableEffect(Unit) {
+        val window = (context as? Activity)?.window
+        window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
     val streamTitle by viewModel.streamTitle.collectAsState()
 
     // make a coroutine scope available for the session listener
@@ -289,6 +307,10 @@ fun ChatScreen(
     val isSubscriber by viewModel.isSubscriber.collectAsState()
     val unreadMessageCount by viewModel.unreadMessageCount.collectAsState()
 
+    // Pending destructive mod action awaiting confirmation (ban / timeout)
+    var pendingModMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var pendingModAction by remember { mutableStateOf<String?>(null) }
+
     val uriHandler = LocalUriHandler.current // uri handler for opening external links
     // Observe Cast debug state to surface errors and provide retry/fallback actions
     // (currently unused; keep the state in CastManager)
@@ -314,6 +336,44 @@ fun ChatScreen(
             user = selectedUserForProfile!!,
             messages = userMessages,
             onDismiss = { viewModel.onDismissUserProfile() }
+        )
+    }
+
+    // Confirmation dialog for destructive moderation actions
+    if (pendingModMessage != null && pendingModAction != null) {
+        val msg = pendingModMessage!!
+        val action = pendingModAction!!
+        val isBan = action == "ban"
+        AlertDialog(
+            onDismissRequest = { pendingModMessage = null; pendingModAction = null },
+            title = {
+                Text(
+                    if (isBan) stringResource(R.string.confirm_ban_title, msg.author ?: "")
+                    else stringResource(R.string.confirm_timeout_title, msg.author ?: "")
+                )
+            },
+            text = {
+                Text(
+                    if (isBan) stringResource(R.string.confirm_ban_text)
+                    else stringResource(R.string.confirm_timeout_text)
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    msg.author?.let { author ->
+                        if (isBan) viewModel.onBan(author) else viewModel.onTimeout(author)
+                    }
+                    pendingModMessage = null
+                    pendingModAction = null
+                }) {
+                    Text(if (isBan) stringResource(R.string.ban) else stringResource(R.string.timeout_10m))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingModMessage = null; pendingModAction = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
         )
     }
 
@@ -416,39 +476,65 @@ fun ChatScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.clickable { viewModel.onChatterListRequested() }
                     ) {
-                        AsyncImage(
-                            model = profileImageUrl,
-                            contentDescription = "Streamer avatar",
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Box {
+                            AsyncImage(
+                                model = profileImageUrl,
+                                contentDescription = stringResource(R.string.chatters),
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                            // Live indicator dot on the avatar
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .clip(CircleShape)
+                                    .background(LiveRed)
+                                    .align(Alignment.BottomEnd)
+                                    .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(text = displayName)
+                                Text(
+                                    text = displayName,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                                 viewerCount?.let {
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = Icons.Default.Person,
-                                            contentDescription = "Viewers",
-                                            modifier = Modifier.size(14.dp),
-                                            tint = Color.Red
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = formatViewerCount(it),
-                                            fontSize = 12.sp,
-                                            color = Color.Red
-                                        )
+                                    Surface(
+                                        color = LiveRed.copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Visibility,
+                                                contentDescription = stringResource(R.string.viewers_content_description),
+                                                modifier = Modifier.size(12.dp),
+                                                tint = LiveRed
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = formatViewerCount(it),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = LiveRed
+                                            )
+                                        }
                                     }
                                 }
                             }
                             streamTitle?.let {
                                 Text(
                                     text = it,
-                                    fontSize = 12.sp,
+                                    fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -459,13 +545,20 @@ fun ChatScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back)
+                        )
                     }
                 },
                 actions = {
                     // Chromecast / Cast button - show native MediaRouteButton when available
-                    CastButton(modifier = Modifier.size(36.dp))
-                 }
+                    // (connection state lives in a slim banner above the message list instead)
+                    CastButton(modifier = Modifier.size(48.dp))
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
             ) // end TopAppBar
         } // end topBar lambda
     ) { paddingValues ->
@@ -476,6 +569,10 @@ fun ChatScreen(
                  .navigationBarsPadding()
                  .imePadding()
         ) {
+            // Slim connection banner above the messages, only shown when NOT connected
+            AnimatedVisibility(visible = connectionState != ConnectionState.CONNECTED) {
+                ConnectionStateBanner(state = connectionState)
+            }
             poll?.let {
                 PollCard(poll = it, onVote = { pollId, choiceId ->
                     viewModel.voteOnPoll(pollId, choiceId)
@@ -494,8 +591,9 @@ fun ChatScreen(
                             message = message,
                             isCurrentUserModerator = isCurrentUserModerator,
                             onShowProfile = { viewModel.onShowUserProfile(message) },
-                            onTimeout = { message.author?.let { viewModel.onTimeout(it) } },
-                            onBan = { message.author?.let { viewModel.onBan(it) } },
+                            // Destructive actions ask for confirmation first (see dialog above)
+                            onTimeout = { pendingModMessage = message; pendingModAction = "timeout" },
+                            onBan = { pendingModMessage = message; pendingModAction = "ban" },
                             onReply = { viewModel.onReply(message) },
                             broadcasterId = twitchUserId // pass the channel's broadcaster id so badges prefer channel-specific ones
                         )
@@ -504,20 +602,37 @@ fun ChatScreen(
 
                 if (messages.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            text = when (connectionState) {
-                                ConnectionState.CONNECTING -> "Connecting to chat..."
-                                ConnectionState.CONNECTED -> "Connected, waiting for messages..."
-                                ConnectionState.ERROR -> "Connection error"
-                                ConnectionState.DISCONNECTED -> "Disconnected"
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = when (connectionState) {
-                                ConnectionState.CONNECTED -> Color.Green
-                                ConnectionState.ERROR -> MaterialTheme.colorScheme.error
-                                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                            }
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = when (connectionState) {
+                                    ConnectionState.CONNECTING -> Icons.Default.Sync
+                                    ConnectionState.CONNECTED -> Icons.Default.ChatBubbleOutline
+                                    ConnectionState.ERROR -> Icons.Default.ErrorOutline
+                                    ConnectionState.DISCONNECTED -> Icons.Default.WifiOff
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(48.dp),
+                                tint = when (connectionState) {
+                                    ConnectionState.ERROR -> MaterialTheme.colorScheme.error
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = when (connectionState) {
+                                    ConnectionState.CONNECTING -> stringResource(R.string.connecting)
+                                    ConnectionState.CONNECTED -> stringResource(R.string.waiting_for_messages)
+                                    ConnectionState.ERROR -> stringResource(R.string.connection_error)
+                                    ConnectionState.DISCONNECTED -> stringResource(R.string.disconnected)
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = when (connectionState) {
+                                    ConnectionState.CONNECTED -> MaterialTheme.colorScheme.tertiary
+                                    ConnectionState.ERROR -> MaterialTheme.colorScheme.error
+                                    else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -593,7 +708,7 @@ fun ChatScreen(
                     Surface(
                         shape = RoundedCornerShape(24.dp),
                         shadowElevation = 6.dp,
-                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.align(Alignment.CenterEnd)
                     ) {
                         Row(
@@ -609,16 +724,22 @@ fun ChatScreen(
                                     }
                                     viewModel.jumpToBottom()
                                 }
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                .padding(horizontal = 14.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Icon(
                                 Icons.Default.ArrowDownward,
-                                contentDescription = "Scroll to bottom",
-                                modifier = Modifier.size(16.dp)
+                                contentDescription = stringResource(R.string.scroll_to_bottom),
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onPrimary
                             )
-                            Text(text = "$unreadMessageCount new messages", fontSize = 12.sp)
+                            Text(
+                                text = stringResource(R.string.new_messages, unreadMessageCount),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
                         }
                     }
                 }
@@ -658,11 +779,15 @@ fun ChatScreen(
                                     .padding(horizontal = 16.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = "Replying to", modifier = Modifier.size(16.dp))
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Reply,
+                                    contentDescription = stringResource(R.string.replying_to, reply.author ?: reply.authorLogin ?: ""),
+                                    modifier = Modifier.size(16.dp)
+                                )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = "Replying to ${reply.authorLogin ?: reply.author}",
+                                        text = stringResource(R.string.replying_to, reply.author ?: reply.authorLogin ?: ""),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         fontWeight = FontWeight.Bold
@@ -674,7 +799,7 @@ fun ChatScreen(
                                     )
                                 }
                                 IconButton(onClick = { viewModel.clearReply() }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear reply")
+                                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.clear_reply))
                                 }
                             }
                         }
@@ -689,7 +814,7 @@ fun ChatScreen(
                                 .padding(horizontal = 12.dp, vertical = 8.dp)
                                 .heightIn(min = 32.dp)) {
                             Text(
-                                text = "You are banned from chat",
+                                text = stringResource(R.string.you_are_banned),
                                 color = MaterialTheme.colorScheme.onErrorContainer,
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.align(Alignment.CenterStart)
@@ -713,22 +838,47 @@ fun ChatScreen(
 
             if (isEmoteMenuVisible) {
                 val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+                var emoteQuery by remember { mutableStateOf("") }
+                val filteredEmotes = remember(visibleEmotes, emoteQuery) {
+                    if (emoteQuery.isBlank()) visibleEmotes
+                    else visibleEmotes.filter { it.code.contains(emoteQuery, ignoreCase = true) }
+                }
                 ModalBottomSheet(
                     onDismissRequest = { viewModel.onEmoteMenuToggled() },
                     sheetState = sheetState,
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    containerColor = MaterialTheme.colorScheme.surface
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 400.dp)
+                            .heightIn(max = 440.dp)
                     ) {
                         // Header
                         Text(
-                            "Select an Emote",
+                            stringResource(R.string.select_an_emote),
                             style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.padding(16.dp),
+                            modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp),
                             fontWeight = FontWeight.Bold
+                        )
+
+                        // Search field to filter emotes by code
+                        OutlinedTextField(
+                            value = emoteQuery,
+                            onValueChange = { emoteQuery = it },
+                            placeholder = { Text(stringResource(R.string.emote_search_hint)) },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                            trailingIcon = {
+                                if (emoteQuery.isNotEmpty()) {
+                                    IconButton(onClick = { emoteQuery = "" }) {
+                                        Icon(Icons.Default.Clear, contentDescription = stringResource(R.string.clear_search))
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
                         )
 
                         // Log available emotes for debugging
@@ -742,7 +892,7 @@ fun ChatScreen(
 
                         // Emote grid - takes most of the space
                         Box(modifier = Modifier.weight(1f)) {
-                            if (visibleEmotes.isEmpty()) {
+                            if (filteredEmotes.isEmpty()) {
                                 Box(
                                     modifier = Modifier.fillMaxSize(),
                                     contentAlignment = Alignment.Center
@@ -752,12 +902,18 @@ fun ChatScreen(
                                         modifier = Modifier.padding(16.dp)
                                     ) {
                                         if (tabs.isEmpty()) {
-                                            Icon(Icons.Default.Error, contentDescription = "No emotes", modifier = Modifier.size(48.dp))
-                                            Text("No emotes loaded", style = MaterialTheme.typography.bodyMedium)
-                                        } else {
-                                            Icon(Icons.Default.Search, contentDescription = "No emotes", modifier = Modifier.size(48.dp))
+                                            Icon(Icons.Default.Error, contentDescription = stringResource(R.string.no_emotes_loaded), modifier = Modifier.size(48.dp))
+                                            Text(stringResource(R.string.no_emotes_loaded), style = MaterialTheme.typography.bodyMedium)
+                                        } else if (emoteQuery.isNotBlank()) {
+                                            Icon(Icons.Default.SearchOff, contentDescription = null, modifier = Modifier.size(48.dp))
                                             Text(
-                                                "No emotes for ${selectedEmoteTab.label}",
+                                                stringResource(R.string.no_results, emoteQuery),
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                        } else {
+                                            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(48.dp))
+                                            Text(
+                                                stringResource(R.string.no_emotes_for_tab, selectedEmoteTab.label),
                                                 style = MaterialTheme.typography.bodySmall
                                             )
                                         }
@@ -765,11 +921,11 @@ fun ChatScreen(
                                 }
                             } else {
                                 LazyVerticalGrid(
-                                    columns = GridCells.Adaptive(minSize = 50.dp),
+                                    columns = GridCells.Adaptive(minSize = 56.dp),
                                     contentPadding = PaddingValues(8.dp),
                                     modifier = Modifier.fillMaxSize()
                                 ) {
-                                    items(visibleEmotes, key = { it.provider.name + ":" + it.id }) { emote ->
+                                    items(filteredEmotes, key = { it.provider.name + ":" + it.id }) { emote ->
                                         Column(
                                             modifier = Modifier
                                                 .clip(RoundedCornerShape(4.dp))
@@ -799,7 +955,7 @@ fun ChatScreen(
 
                         // Tab row at the bottom for platform selection
                         if (tabs.isNotEmpty()) {
-                            Divider(modifier = Modifier.fillMaxWidth())
+                            HorizontalDivider(modifier = Modifier.fillMaxWidth())
                             ScrollableTabRow(
                                 selectedTabIndex = tabs.indexOf(selectedEmoteTab).coerceAtLeast(0),
                                 containerColor = MaterialTheme.colorScheme.surface,
@@ -825,20 +981,20 @@ fun ChatScreen(
     if (showCastDialog) {
         AlertDialog(
             onDismissRequest = { closeCastDialog() },
-            title = { Text("Cast to Device") },
-            text = { Text("Select a device to cast the stream to.") },
+            title = { Text(stringResource(R.string.cast_to_device)) },
+            text = { Text(stringResource(R.string.cast_select_device)) },
             confirmButton = {
                 TextButton(onClick = {
                     // Fallback action: open the stream URL in a browser
                     uriHandler.openUri("https://www.twitch.tv/$channelName")
                     closeCastDialog()
                 }) {
-                    Text("Open in Browser")
+                    Text(stringResource(R.string.open_in_browser))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { closeCastDialog() }) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.cancel))
                 }
             }
         )
@@ -853,7 +1009,8 @@ private fun HighlightedTextToken(token: TextToken, isDeleted: Boolean, modifier:
             text = token.text,
             modifier = modifier,
             fontSize = 14.sp,
-            color = if (isDeleted) Color.Gray else MaterialTheme.colorScheme.onSurface
+            color = if (isDeleted) Color.Gray else MaterialTheme.colorScheme.onSurface,
+            textDecoration = if (isDeleted) TextDecoration.LineThrough else null
         )
         return
     }
@@ -887,7 +1044,8 @@ private fun HighlightedTextToken(token: TextToken, isDeleted: Boolean, modifier:
         text = annotatedString,
         modifier = modifier,
         fontSize = 14.sp,
-        color = MaterialTheme.colorScheme.onSurface
+        color = if (isDeleted) Color.Gray else MaterialTheme.colorScheme.onSurface,
+        textDecoration = if (isDeleted) TextDecoration.LineThrough else null
     )
 }
 
@@ -986,10 +1144,11 @@ fun ChatMessageItem(
     // Check if someone is replying to the current user's own message (red highlight for replies TO our messages only)
     val currentUserLogin = UserManager.currentUser?.login ?: ""
     val isReplyToOwnMessage = remember(message.replyParentMsgId, message.tags) {
-        // Only highlight if: this is a reply AND the replied-to user is the current user
+        // Only highlight if: this is a reply AND the replied-to user is the current user.
+        // Note: the correct tag is "reply-parent-user-login"; "reply-parent-user-id" holds the numeric user ID.
         message.replyParentMsgId != null &&
         !message.tags.isNullOrEmpty() &&
-        message.tags["reply-parent-user-id"] == currentUserLogin
+        message.tags["reply-parent-user-login"]?.equals(currentUserLogin, ignoreCase = true) == true
     }
 
     val highlightColor = when {
@@ -1035,7 +1194,7 @@ fun ChatMessageItem(
         if (kotlin.math.abs(offsetX) > 0) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.Reply,
-                contentDescription = "Reply",
+                contentDescription = stringResource(R.string.cd_reply),
                 modifier = Modifier
                     .align(if (offsetX > 0) Alignment.CenterStart else Alignment.CenterEnd)
                     .padding(horizontal = 16.dp)
@@ -1050,8 +1209,16 @@ fun ChatMessageItem(
                     onClick = {},
                     onLongClick = { showMenu = true }
                 )
-                .background(highlightColor, shape = MaterialTheme.shapes.small)
-                .padding(vertical = 4.dp, horizontal = 8.dp)
+                .semantics(mergeDescendants = true) {
+                    // Single TalkBack node per chat message: "author: message"
+                    contentDescription = buildString {
+                        message.replyParentMsgBody?.let { append("Reply to: $it. ") }
+                        if (message.author != null) append("${message.author}: ")
+                        append(message.message)
+                    }
+                }
+                .background(highlightColor, shape = MaterialTheme.shapes.medium)
+                .padding(vertical = 6.dp, horizontal = 10.dp)
         ) {
             message.replyParentMsgBody?.let { parentMessageBody ->
                 // Use replyParentDisplayName if available, otherwise try to resolve from known users or fallback to login
@@ -1069,10 +1236,10 @@ fun ChatMessageItem(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = "Reply to", modifier = Modifier.size(14.dp), tint = Color.Gray)
+                    Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = stringResource(R.string.cd_reply_to), modifier = Modifier.size(14.dp), tint = Color.Gray)
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "$parentAuthor: ${parentMessageBody.take(40)}${if (parentMessageBody.length > 40) "..." else ""}",
+                        text = "$parentAuthor: ${parentMessageBody.take(40)}${if (parentMessageBody.length > 40) "…" else ""}",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray,
                         maxLines = 1
@@ -1103,7 +1270,7 @@ fun ChatMessageItem(
                         MessageType.SUBSCRIPTION -> {
                             Icon(
                                 imageVector = Icons.Default.Star,
-                                contentDescription = "Subscription",
+                                contentDescription = stringResource(R.string.cd_subscription),
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier
                                     .size(18.dp)
@@ -1114,7 +1281,7 @@ fun ChatMessageItem(
                         MessageType.RAID -> {
                             Icon(
                                 imageVector = Icons.Default.People,
-                                contentDescription = "Raid",
+                                contentDescription = stringResource(R.string.cd_raid),
                                 tint = MaterialTheme.colorScheme.secondary,
                                 modifier = Modifier
                                     .size(18.dp)
@@ -1125,7 +1292,7 @@ fun ChatMessageItem(
                         MessageType.ANNOUNCEMENT -> {
                             Icon(
                                 imageVector = Icons.Default.Campaign,
-                                contentDescription = "Announcement",
+                                contentDescription = stringResource(R.string.cd_announcement),
                                 tint = MaterialTheme.colorScheme.tertiary,
                                 modifier = Modifier
                                     .size(18.dp)
@@ -1135,7 +1302,7 @@ fun ChatMessageItem(
                         MessageType.SYSTEM -> {
                             Icon(
                                 imageVector = Icons.Default.Info,
-                                contentDescription = "System Message",
+                                contentDescription = stringResource(R.string.cd_system_message),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier
                                     .size(18.dp)
@@ -1245,22 +1412,22 @@ fun ChatMessageItem(
             onDismissRequest = { showMenu = false }
         ) {
             DropdownMenuItem(
-                text = { Text("Reply") },
+                text = { Text(stringResource(R.string.reply)) },
                 onClick = {
                     onReply(message)
                     showMenu = false
                 }
             )
-            DropdownMenuItem(text = { Text("Profile") }, onClick = {
+            DropdownMenuItem(text = { Text(stringResource(R.string.profile)) }, onClick = {
                 onShowProfile()
                 showMenu = false
             })
             if (isCurrentUserModerator) {
-                DropdownMenuItem(text = { Text("Time out (10m)") }, onClick = {
+                DropdownMenuItem(text = { Text(stringResource(R.string.timeout_10m)) }, onClick = {
                     onTimeout()
                     showMenu = false
                 })
-                DropdownMenuItem(text = { Text("Ban") }, onClick = {
+                DropdownMenuItem(text = { Text(stringResource(R.string.ban)) }, onClick = {
                     onBan()
                     showMenu = false
                 })
@@ -1270,7 +1437,6 @@ fun ChatMessageItem(
 }
 
 
-@OptIn(ExperimentalMaterialApi::class)
 @Composable
 fun ChatterListScreen(
     chatters: Map<String, List<String>>,
@@ -1281,17 +1447,19 @@ fun ChatterListScreen(
     streamTitle: String?,
     viewerCount: Int?
 ) {
-    val pullRefreshState = rememberPullRefreshState(refreshing = isLoading, onRefresh = onRefresh)
-
-    Box(Modifier.pullRefresh(pullRefreshState)) {
-        Surface(modifier = Modifier.fillMaxSize()) {
+    PullToRefreshBox(
+        isRefreshing = isLoading,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             if (isLoading && chatters.values.all { it.isEmpty() }) {
                 Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
             } else if (!isLoading && chatters.values.all { it.isEmpty() }) {
                 Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                    Text("Could not load chatters or the chat is empty.", textAlign = TextAlign.Center)
+                    Text(stringResource(R.string.could_not_load_chatters), textAlign = TextAlign.Center)
                 }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -1305,10 +1473,11 @@ fun ChatterListScreen(
                         ) {
                             AsyncImage(
                                 model = profileImageUrl,
-                                contentDescription = "Streamer avatar",
+                                contentDescription = null,
                                 modifier = Modifier
                                     .size(64.dp)
-                                    .clip(CircleShape)
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
                             )
                             Text(
                                 text = displayName,
@@ -1323,17 +1492,35 @@ fun ChatterListScreen(
                                 )
                             }
                             viewerCount?.let {
-                                Text(
-                                    text = "${formatViewerCount(it)} viewers",
-                                    color = Color.Red,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
+                                Surface(
+                                    color = LiveRed.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Visibility,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(14.dp),
+                                            tint = LiveRed
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = stringResource(R.string.viewers_count, formatViewerCount(it)),
+                                            color = LiveRed,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                    item { // Add a title to the bottom sheet
+                    item { // Title of the bottom sheet
                         Text(
-                            text = "Chatters",
+                            text = stringResource(R.string.chatters),
                             style = MaterialTheme.typography.headlineSmall,
                             modifier = Modifier.padding(16.dp)
                         )
@@ -1341,19 +1528,35 @@ fun ChatterListScreen(
                     chatters.forEach { (role, chatterList) ->
                         if (chatterList.isNotEmpty()) {
                             item {
-                                Text(
-                                    text = role,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp)
-                                )
+                                ) {
+                                    Icon(
+                                        imageVector = roleIcon(role),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "$role (${chatterList.size})",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                             items(chatterList) { chatter ->
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.padding(vertical = 4.dp, horizontal = 16.dp)
                                 ) {
-                                    Icon(Icons.Default.Person, contentDescription = role, modifier = Modifier.size(16.dp))
+                                    Icon(
+                                        Icons.Default.Person,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(chatter)
                                 }
@@ -1363,13 +1566,14 @@ fun ChatterListScreen(
                 }
             }
         }
-
-        PullRefreshIndicator(
-            refreshing = isLoading,
-            state = pullRefreshState,
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
     }
+}
+
+private fun roleIcon(role: String): ImageVector = when (role) {
+    "Broadcaster" -> Icons.Default.Star
+    "Moderators" -> Icons.Default.Shield
+    "VIPs" -> Icons.Default.WorkspacePremium
+    else -> Icons.Default.People
 }
 
 
@@ -1386,15 +1590,25 @@ fun UserInfoDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AsyncImage(
                     model = user.tags["profile-image-url"],
-                    contentDescription = "User Avatar",
-                    modifier = Modifier.size(40.dp).clip(CircleShape)
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(user.author ?: "Unknown User")
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(user.author ?: "Unknown User", fontWeight = FontWeight.Bold)
+                    Text(
+                        text = stringResource(R.string.messages_in_chat, messages.size),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         },
         text = {
-            LazyColumn {
+            LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
                 items(messages) { message ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -1411,7 +1625,7 @@ fun UserInfoDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Close")
+                Text(stringResource(R.string.close))
             }
         }
     )
@@ -1423,11 +1637,34 @@ fun PollCard(poll: Poll, onVote: (String, String) -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(8.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(text = poll.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Poll,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = poll.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = stringResource(R.string.votes_count, poll.totalVotes),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
 
             poll.choices.forEach {
                 PollChoiceItem(choice = it, totalVotes = poll.totalVotes, onVote = {
@@ -1437,7 +1674,12 @@ fun PollCard(poll: Poll, onVote: (String, String) -> Unit) {
             }
 
             if (poll.status == "COMPLETED") {
-                Text("Poll has ended", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    stringResource(R.string.poll_ended),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
             }
         }
     }
@@ -1446,15 +1688,28 @@ fun PollCard(poll: Poll, onVote: (String, String) -> Unit) {
 @Composable
 fun PollChoiceItem(choice: PollChoice, totalVotes: Int, onVote: () -> Unit) {
     val percentage = if (totalVotes > 0) choice.votes.toFloat() / totalVotes else 0f
-    val animatedPercentage by animateFloatAsState(targetValue = percentage, label = "")
+    val animatedPercentage by animateFloatAsState(targetValue = percentage, label = "pollProgress")
 
     Column(modifier = Modifier.clickable(onClick = onVote)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(text = choice.title, modifier = Modifier.weight(1f))
+            Text(
+                text = choice.title,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             Text(text = "${(animatedPercentage * 100).toInt()}%", fontWeight = FontWeight.Bold)
         }
         Spacer(modifier = Modifier.height(4.dp))
-        LinearProgressIndicator(progress = { animatedPercentage }, modifier = Modifier.fillMaxWidth())
+        LinearProgressIndicator(
+            progress = { animatedPercentage },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(4.dp)),
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = MaterialTheme.colorScheme.surface
+        )
     }
 }
 
@@ -1466,67 +1721,137 @@ fun ChatInputBar(
     onEmoteClick: () -> Unit,
     enabled: Boolean = true
 ) {
-    Row(
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(8.dp)
-            .height(IntrinsicSize.Min),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 2.dp
     ) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = onTextChanged,
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("Send a message") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions.Default.copy(
-                capitalization = KeyboardCapitalization.Sentences,
-                imeAction = ImeAction.Send
-            ),
-            keyboardActions = KeyboardActions(
-                onSend = {
-                    if (text.text.isNotBlank()) {
-                        onSendClick()
-                    }
-                }
-            ),
-            leadingIcon = {
-                IconButton(onClick = onEmoteClick) {
-                    Icon(Icons.Filled.Mood, contentDescription = "Open emote menu")
-                }
-            },
-            enabled = enabled
-        )
-
-        Spacer(modifier = Modifier.width(8.dp))
-
-        Surface(
-            shape = CircleShape,
-            color = if (text.text.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(
-                alpha = 0.12f
-            ),
-            modifier = Modifier
-                .fillMaxHeight()
-                .aspectRatio(1f)
-                .clickable(enabled = text.text.isNotBlank(), onClick = onSendClick)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 4.dp, end = 8.dp)
         ) {
-            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            IconButton(
+                onClick = onEmoteClick,
+                enabled = enabled,
+                modifier = Modifier.size(48.dp)
+            ) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Send",
-                    tint = if (text.text.isNotBlank()) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(
-                        alpha = 0.38f
-                    )
+                    Icons.Filled.Mood,
+                    contentDescription = stringResource(R.string.emote_menu)
                 )
+            }
+            OutlinedTextField(
+                value = text,
+                onValueChange = onTextChanged,
+                modifier = Modifier
+                    .weight(1f)
+                    .defaultMinSize(minHeight = 48.dp),
+                placeholder = { Text(stringResource(R.string.send_a_message)) },
+                keyboardOptions = KeyboardOptions.Default.copy(
+                    capitalization = KeyboardCapitalization.Sentences,
+                    imeAction = ImeAction.Send
+                ),
+                keyboardActions = KeyboardActions(
+                    onSend = {
+                        if (text.text.isNotBlank()) {
+                            onSendClick()
+                        }
+                    }
+                ),
+                maxLines = 4,
+                shape = RoundedCornerShape(24.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent
+                ),
+                enabled = enabled
+            )
+            Box(
+                modifier = Modifier.size(48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                FilledIconButton(
+                    onClick = onSendClick,
+                    enabled = enabled && text.text.isNotBlank(),
+                    modifier = Modifier.size(40.dp),
+                    colors = IconButtonDefaults.iconButtonColors(
+                        containerColor = if (text.text.isNotBlank()) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                        contentColor = if (text.text.isNotBlank()) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = stringResource(R.string.send),
+                        tint = if (text.text.isNotBlank()) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    )
+                }
             }
         }
     }
 }
 
-private fun formatViewerCount(count: Int): String {
-    return when {
-        count >= 1_000_000 -> String.format(Locale.ROOT, "%.1fM", count / 1_000_000f)
-        count >= 1_000 -> String.format(Locale.ROOT, "%.1fK", count / 1_000f)
-        else -> count.toString()
+/**
+ * Slim full-width banner above the chat message list showing the IRC connection state.
+ * Only rendered when the chat is NOT connected, so the top bar stays uncluttered.
+ */
+@Composable
+private fun ConnectionStateBanner(state: ConnectionState) {
+    val color = when (state) {
+        ConnectionState.CONNECTED -> MaterialTheme.colorScheme.tertiary
+        ConnectionState.CONNECTING -> Color(0xFFFFB300)
+        ConnectionState.ERROR -> MaterialTheme.colorScheme.error
+        ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val label = when (state) {
+        ConnectionState.CONNECTED -> stringResource(R.string.connected)
+        ConnectionState.CONNECTING -> stringResource(R.string.connecting)
+        ConnectionState.ERROR -> stringResource(R.string.connection_error)
+        ConnectionState.DISCONNECTED -> stringResource(R.string.disconnected)
+    }
+    Surface(
+        color = color.copy(alpha = 0.12f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics {
+                contentDescription = label
+                liveRegion = LiveRegionMode.Polite // announce connection changes to TalkBack
+            }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (state == ConnectionState.CONNECTING) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 2.dp,
+                    color = color
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(color)
+                )
+            }
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = color,
+                maxLines = 1
+            )
+        }
     }
 }
+
+// formatViewerCount is shared via CommonUi.kt

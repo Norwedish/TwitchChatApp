@@ -53,7 +53,12 @@ object BadgeManager {
     private val badgeCache = ConcurrentHashMap<String, ConcurrentHashMap<String, String>>()
 
     // Per-user badge keys cache: login -> List<"set_id/version">
-    private val userBadgeKeys = ConcurrentHashMap<String, MutableList<String>>()
+    // Bounded LRU so a long-running chat session cannot grow this map without limit.
+    private const val MAX_USER_BADGE_ENTRIES = 500
+    private val userBadgeKeys = object : LinkedHashMap<String, MutableList<String>>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MutableList<String>>?): Boolean =
+            size > MAX_USER_BADGE_ENTRIES
+    }
 
     private var globalLoaded = false
 
@@ -151,42 +156,23 @@ object BadgeManager {
     }
 
     /**
-     * Get all badge keys for a channel. Returns list of "set_id/version" strings.
-     */
-    fun getAllBadgeKeys(broadcasterId: String): List<String> {
-        if (broadcasterId.isBlank()) return emptyList()
-        val map = badgeCache[broadcasterId] ?: return emptyList()
-        return map.keys.toList()
-    }
-
-    /**
-     * Get all badge keys for global badges. Returns list of "set_id/version" strings.
-     */
-    fun getAllGlobalBadgeKeys(): List<String> {
-        val map = badgeCache["global"] ?: return emptyList()
-        return map.keys.toList()
-    }
-
-    /**
-     * Store badge keys for a user by their login name.
+     * Store badge keys for a user by their login name (called from USERSTATE events).
+     * Replaces any previously stored keys so badge changes (sub tiers, mod status, ...) are reflected.
      */
     fun storeUserBadges(userLogin: String, badgeKeys: List<String>) {
-        if (badgeKeys.isEmpty()) return
+        if (userLogin.isBlank() || badgeKeys.isEmpty()) return
         synchronized(userBadgeKeys) {
-            val existing = userBadgeKeys[userLogin]
-            if (existing != null && existing.isNotEmpty()) {
-                // Already have badges for this user
-                return
-            }
-            userBadgeKeys[userLogin] = mutableListOf(*badgeKeys.toTypedArray())
-            Log.d(TAG, "Stored ${badgeKeys.size} badge keys for user $userLogin")
+            userBadgeKeys[userLogin] = badgeKeys.toMutableList()
         }
+        Log.d(TAG, "Stored ${badgeKeys.size} badge keys for user $userLogin")
     }
 
     /**
-     * Get stored badge keys for a user by their login name.
+     * Get stored badge keys for a user by their login name (returns a copy; callers must not mutate it).
      */
     fun getUserBadgeKeys(userLogin: String): List<String> {
-        return userBadgeKeys[userLogin] ?: emptyList()
+        return synchronized(userBadgeKeys) {
+            userBadgeKeys[userLogin]?.toList() ?: emptyList()
+        }
     }
 }

@@ -28,7 +28,6 @@ import io.ktor.client.request.header
 import io.ktor.client.request.headers
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
-import io.ktor.client.request.url
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.contentType
@@ -207,19 +206,6 @@ class ChatService : Service() {
 
     fun isNoticeSuppressed(msgId: String): Boolean = suppressedRoomStateNotices.contains(msgId)
 
-    fun getSuppressedNotices(): Set<String> = HashSet(suppressedRoomStateNotices)
-
-    fun setSuppressedNotices(newSet: Set<String>) {
-        suppressedRoomStateNotices.clear()
-        suppressedRoomStateNotices.addAll(newSet)
-        saveSuppressedNoticesToPrefs()
-    }
-
-    fun toggleSuppressedNotice(msgId: String, enabled: Boolean) {
-        if (enabled) suppressedRoomStateNotices.add(msgId) else suppressedRoomStateNotices.remove(msgId)
-        saveSuppressedNoticesToPrefs()
-    }
-
     private val client = HttpClient(CIO) {
         install(WebSockets)
         install(ContentNegotiation) {
@@ -230,13 +216,14 @@ class ChatService : Service() {
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState = _connectionState.asStateFlow()
 
-    private val _chatMessages = MutableSharedFlow<ChatMessage>()
+    // Buffered flows so emit() in the read loop never suspends and message order is preserved
+    private val _chatMessages = MutableSharedFlow<ChatMessage>(extraBufferCapacity = 64)
     val chatMessages = _chatMessages.asSharedFlow()
 
-    private val _deletedMessageIds = MutableSharedFlow<String>()
+    private val _deletedMessageIds = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val deletedMessageIds = _deletedMessageIds.asSharedFlow()
 
-    private val _deletedUserMessages = MutableSharedFlow<String>()
+    private val _deletedUserMessages = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val deletedUserMessages = _deletedUserMessages.asSharedFlow()
 
     private val _isCurrentUserModerator = MutableStateFlow(false)
@@ -248,6 +235,10 @@ class ChatService : Service() {
 
     @Volatile
     private var hasJoinedChannel: Boolean = false
+
+    // When false (logout / explicit disconnect), the reconnect loop stops
+    @Volatile
+    private var reconnectEnabled: Boolean = true
 
     private val _poll = MutableStateFlow<Poll?>(null)
     val poll = _poll.asStateFlow()
@@ -311,8 +302,7 @@ class ChatService : Service() {
     private fun createNotificationChannel() {
         val name = "Twitch Chat Service"
         val descriptionText = "Notification channel for the chat service"
-        val importance = NotificationManager.IMPORTANCE_DEFAULT
-        val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
+        val channel = NotificationChannel(CHANNEL_ID, name, NotificationManager.IMPORTANCE_LOW).apply {
             description = descriptionText
             setSound(null, null)
             enableVibration(false)
@@ -370,38 +360,53 @@ class ChatService : Service() {
         currentChatters.clear()
         _chatters.value = emptyList()
         _roomState.value = null
+        reconnectEnabled = true
 
         connectionJob = serviceScope.launch {
-            _connectionState.value = ConnectionState.CONNECTING
-            try {
-                client.wss(
-                    method = HttpMethod.Get,
-                    host = "irc-ws.chat.twitch.tv",
-                    port = 443,
-                    path = ""
-                ) {
-                    session = this
-                    val normalizedToken = token.removePrefix("oauth:")
+            var attempt = 0
+            // Reconnect loop with exponential backoff so a dropped connection heals itself
+            while (isActive && reconnectEnabled) {
+                _connectionState.value = ConnectionState.CONNECTING
+                try {
+                    client.wss(
+                        method = HttpMethod.Get,
+                        host = "irc-ws.chat.twitch.tv",
+                        port = 443,
+                        path = ""
+                    ) {
+                        session = this
+                        val normalizedToken = token.removePrefix("oauth:")
 
-                    sendIrc("PASS oauth:$normalizedToken")
-                    sendIrc("NICK $nick")
-                    sendIrc("CAP REQ :twitch.tv/membership")
-                    sendIrc("CAP REQ :twitch.tv/tags")
-                    sendIrc("CAP REQ :twitch.tv/commands")
+                        sendIrc("PASS oauth:$normalizedToken")
+                        sendIrc("NICK $nick")
+                        sendIrc("CAP REQ :twitch.tv/membership")
+                        sendIrc("CAP REQ :twitch.tv/tags")
+                        sendIrc("CAP REQ :twitch.tv/commands")
 
-                    listenToMessages(channelName)
+                        listenToMessages(channelName)
+                    }
+                } catch (_: CancellationException) {
+                    break
+                } catch (e: Exception) {
+                    Log.e(TAG, "WebSocket error: ${e.message}")
+                    if (isActive && reconnectEnabled) {
+                        _connectionState.value = ConnectionState.ERROR
+                    }
+                } finally {
+                    session?.close()
+                    session = null
+                    hasJoinedChannel = false
+                    if (_connectionState.value != ConnectionState.ERROR) {
+                        _connectionState.value = ConnectionState.DISCONNECTED
+                    }
                 }
-            } catch (_: CancellationException) {
-            } catch (e: Exception) {
-                Log.e(TAG, "WebSocket error: ${e.message}")
-                _connectionState.value = ConnectionState.ERROR
-            } finally {
-                session?.close()
-                session = null
-                hasJoinedChannel = false
-                if (_connectionState.value != ConnectionState.ERROR) {
-                    _connectionState.value = ConnectionState.DISCONNECTED
-                }
+
+                if (!isActive || !reconnectEnabled) break
+                // Exponential backoff: 2s, 4s, 8s, 16s, then capped at 30s
+                attempt++
+                val backoffMs = (2_000L shl minOf(attempt - 1, 4)).coerceAtMost(30_000L)
+                Log.d(TAG, "Reconnecting to chat in ${backoffMs}ms (attempt $attempt)")
+                delay(backoffMs)
             }
         }
     }
@@ -423,11 +428,13 @@ class ChatService : Service() {
     }
 
     fun disconnect() {
+        reconnectEnabled = false
         _isCurrentUserModerator.value = false
         hasJoinedChannel = false
         connectionJob?.cancel()
         _poll.value = null
         _roomState.value = null
+        _connectionState.value = ConnectionState.DISCONNECTED
     }
 
     fun sendMessage(channelName: String, message: String, replyToMessageId: String? = null, nonce: String? = null) {
@@ -499,69 +506,76 @@ class ChatService : Service() {
                         rawMessage.contains("ERR_PASSWDMISMATCH") ||
                         rawMessage.contains("ERR_UNKNOWNCOMMAND")) {
                         Log.e(TAG, "IRC authentication error detected")
-                        UserManager.logout()
+                        reconnectEnabled = false // don't keep retrying with a bad token
+                        serviceScope.launch { UserManager.logout() }
                         return@forEach
                     }
 
-                    val joinMatch = Regex(":([^!]+)!.* JOIN #").find(rawMessage)
-                    val partMatch = Regex(":([^!]+)!.* PART #").find(rawMessage)
-
-                    if (rawMessage.contains(" 001 ")) { 
-                        hasJoinedChannel = false
-                        sendIrc("JOIN #$normalizedChannel")
-                    } else if (rawMessage.contains("ROOMSTATE") && rawMessage.contains("#$normalizedChannel")) {
-                        hasJoinedChannel = true
-                        _connectionState.value = ConnectionState.CONNECTED
-                        handleRoomState(rawMessage)
-                    } else if (rawMessage.contains("USERSTATE") && rawMessage.contains("#$normalizedChannel")) {
-                        hasJoinedChannel = true
-                        _connectionState.value = ConnectionState.CONNECTED
-                        handleUserState(rawMessage)
-                    } else if (rawMessage.contains(" 353 ")) { 
-                        val usersPart = rawMessage.substringAfterLast(':')
-                        val users = usersPart.trim().split(' ').filter { it.isNotBlank() }
-                        currentChatters.addAll(users)
-                        _chatters.value = currentChatters.toList().sorted()
-                    } else if (rawMessage.contains(" 366 ")) {
-                        _chatters.value = currentChatters.toList().sorted()
-                    }
-                    else if (joinMatch != null) {
-                        val username = joinMatch.groupValues[1]
-                        if (currentChatters.add(username)) {
-                            _chatters.value = currentChatters.toList().sorted()
+                    // Dispatch on the IRC command token instead of substring matching, so chat
+                    // text containing e.g. "NOTICE" or "ROOMSTATE" is never misrouted.
+                    when (ircCommand(rawMessage)) {
+                        "001" -> {
+                            hasJoinedChannel = false
+                            sendIrc("JOIN #$normalizedChannel")
                         }
-                        val currentLogin = UserManager.currentUser?.login
-                        if (!currentLogin.isNullOrBlank() && username.equals(currentLogin, ignoreCase = true)) {
+                        "ROOMSTATE" -> if (rawMessage.contains("#$normalizedChannel")) {
                             hasJoinedChannel = true
                             _connectionState.value = ConnectionState.CONNECTED
+                            handleRoomState(rawMessage)
                         }
-                    } else if (partMatch != null) {
-                        val username = partMatch.groupValues[1]
-                        if (currentChatters.remove(username)) {
+                        "USERSTATE" -> if (rawMessage.contains("#$normalizedChannel")) {
+                            hasJoinedChannel = true
+                            _connectionState.value = ConnectionState.CONNECTED
+                            handleUserState(rawMessage)
+                        }
+                        "353" -> {
+                            val usersPart = rawMessage.substringAfterLast(':')
+                            val users = usersPart.trim().split(' ').filter { it.isNotBlank() }
+                            currentChatters.addAll(users)
                             _chatters.value = currentChatters.toList().sorted()
                         }
-                    } else if (rawMessage.contains("USERNOTICE") && rawMessage.contains("msg-id=channel.poll.")) {
-                        handlePollNotice(rawMessage)
-                    } else if (rawMessage.contains("USERNOTICE")) {
-                        try {
-                            val parsed = parseMessage(rawMessage)
-                            parsed?.let {
-                                serviceScope.launch { _chatMessages.emit(it) }
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to parse USERNOTICE", e)
+                        "366" -> {
+                            _chatters.value = currentChatters.toList().sorted()
                         }
-                    } else if (rawMessage.contains("CLEARMSG")) {
-                        handleClearMessage(rawMessage)
-                    } else if (rawMessage.contains("CLEARCHAT")) {
-                        handleClearChat(rawMessage)
-                    } else if (rawMessage.contains("NOTICE")) {
-                        handleNotice(rawMessage)
-                    }
-                    else {
-                        val parsed = parseMessage(rawMessage)
-                        if (parsed != null && parsed.message.isNotBlank()) {
-                            serviceScope.launch { _chatMessages.emit(parsed) }
+                        "JOIN" -> {
+                            val username = rawMessage.substringAfter(':').substringBefore('!')
+                            if (currentChatters.add(username)) {
+                                _chatters.value = currentChatters.toList().sorted()
+                            }
+                            val currentLogin = UserManager.currentUser?.login
+                            if (!currentLogin.isNullOrBlank() && username.equals(currentLogin, ignoreCase = true)) {
+                                hasJoinedChannel = true
+                                _connectionState.value = ConnectionState.CONNECTED
+                            }
+                        }
+                        "PART" -> {
+                            val username = rawMessage.substringAfter(':').substringBefore('!')
+                            if (currentChatters.remove(username)) {
+                                _chatters.value = currentChatters.toList().sorted()
+                            }
+                        }
+                        "USERNOTICE" -> {
+                            if (rawMessage.contains("msg-id=channel.poll.")) {
+                                handlePollNotice(rawMessage)
+                            } else {
+                                try {
+                                    parseMessage(rawMessage)?.let {
+                                        if (it.message.isNotBlank()) _chatMessages.emit(it)
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed to parse USERNOTICE", e)
+                                }
+                            }
+                        }
+                        "CLEARMSG" -> handleClearMessage(rawMessage)
+                        "CLEARCHAT" -> handleClearChat(rawMessage)
+                        "NOTICE" -> handleNotice(rawMessage)
+                        else -> {
+                            val parsed = parseMessage(rawMessage)
+                            if (parsed != null && parsed.message.isNotBlank()) {
+                                // Direct emit: the flow has a buffer, so this preserves order
+                                _chatMessages.emit(parsed)
+                            }
                         }
                     }
                 }
@@ -570,6 +584,14 @@ class ChatService : Service() {
     }
 
     private fun normalizeChannelName(channelName: String): String = channelName.trim().removePrefix("#")
+
+    /** Extracts the IRC command token (e.g. PRIVMSG, ROOMSTATE, 001) from a raw IRC line. */
+    private fun ircCommand(raw: String): String {
+        var s = raw
+        if (s.startsWith("@")) s = s.substringAfter(" ")
+        if (s.startsWith(":")) s = s.substringAfter(" ")
+        return s.substringBefore(" ").uppercase()
+    }
 
     private suspend fun DefaultClientWebSocketSession.sendIrc(line: String) {
         val sanitized = line.replace("\u0000", "").trimEnd('\r', '\n')
@@ -588,8 +610,12 @@ class ChatService : Service() {
         
         val noticeMsgId = tags["msg-id"] ?: ""
 
-        if (noticeMsgId == "login_authentication_failed" || noticeMsgId == "msg_ratelimit") {
+        if (noticeMsgId == "login_authentication_failed") {
+            reconnectEnabled = false // don't keep retrying with a bad token
             serviceScope.launch { UserManager.logout() }
+            return
+        }
+        if (noticeMsgId == "msg_ratelimit") {
             return
         }
 
@@ -622,6 +648,8 @@ class ChatService : Service() {
         }
     }
 
+    // NOTE: emits for chatMessages use the buffered flow directly in the read loop (see listenToMessages).
+
     private fun handleClearChat(rawMessage: String) {
         val targetUser = rawMessage.substringAfterLast(":", "").trim()
         if (targetUser.isNotEmpty()) {
@@ -630,6 +658,8 @@ class ChatService : Service() {
             }
         }
     }
+
+    // (deletedUserMessages/deletedMessageIds emits stay in launch{} here; they are rare events)
 
     private fun handleUserState(rawMessage: String) {
         val tagsPart = rawMessage.substringAfter('@').substringBefore(" :")
@@ -642,9 +672,10 @@ class ChatService : Service() {
         val badgesTag = tags["badges"] ?: ""
         if (badgesTag.isNotBlank()) {
             val badgeKeys = badgesTag.split(",").filter { it.isNotBlank() }.toList()
-            val senderName = tags["display-name"] ?: tags["user-id"] ?: ""
-            BadgeManager.storeUserBadges(senderName, badgeKeys)
-            Log.d(TAG, "Cached ${badgeKeys.size} badges for user $senderName from USERSTATE")
+            // Key by login (not display-name) so ChatViewModel can look the badges up via currentUser.login.
+            val senderLogin = tags["login"] ?: tags["user-id"] ?: ""
+            BadgeManager.storeUserBadges(senderLogin, badgeKeys)
+            Log.d(TAG, "Cached ${badgeKeys.size} badges for user $senderLogin from USERSTATE")
         }
 
         val badges = tags["badges"]?.split(',') ?: emptyList()

@@ -30,7 +30,8 @@ object ChatMessageParser {
         val match = pattern.find(afterTags)
 
         if (match != null) {
-            val senderName = match.groupValues[1]
+            // Strip a leading ':' from tag-less lines (e.g. ":tmi.twitch.tv PRIVMSG ..."), which the regex otherwise swallows into the sender name
+            val senderName = match.groupValues[1].removePrefix(":")
             val command = match.groupValues[2]
             val channel = match.groupValues[3]
             val userMessage = match.groupValues[4]
@@ -162,8 +163,11 @@ object ChatMessageParser {
                 val foundName = displayNameCandidates.asSequence().mapNotNull { tags[it]?.takeIf { it.isNotEmpty() } }.firstOrNull() ?: foundLogin
                 Pair(foundLogin, foundName)
             } else {
-                // For PRIVMSG, extract login from tags (works for both echo and regular messages)
-                val loginFromTags = tags["login"] ?: tags["user-id"] ?: senderName.takeIf { it != "tmi.twitch.tv" }
+                // For PRIVMSG, extract login from tags (works for both echo and regular messages).
+                // Fall back to the sender prefix (user part of "user!user@host") before user-id,
+                // so authorLogin is a real login name and never a numeric user-id.
+                val senderLogin = senderName.substringBefore("!").takeIf { it.isNotEmpty() && it != "tmi.twitch.tv" }
+                val loginFromTags = tags["login"] ?: senderLogin ?: tags["user-id"]
                 Pair(loginFromTags?.lowercase(), displayName?.takeIf { it.isNotEmpty() } ?: loginFromTags?.takeIf { it != null })
             }
 
@@ -179,19 +183,37 @@ object ChatMessageParser {
                 tags = tags,
                 replyParentMsgId = tags["reply-parent-msg-id"],
                 replyParentUserLogin = tags["reply-parent-user-login"],
-                replyParentDisplayName = tags["reply-parent-user-login"],
                 replyParentMsgBody = tags["reply-parent-msg-body"]
             )
         }
         return null
     }
 
+    /**
+     * Single-pass IRC tag unescaper. Handles \\s, \\:, \\r, \\n and \\\\ correctly
+     * (a chained replace() would corrupt "\\\\s" into "\ " because \\s is replaced first).
+     */
     private fun unescapeTagValue(value: String?): String {
         if (value == null) return ""
-        return value.replace("\\s", " ")
-            .replace("\\:", ";")
-            .replace("\\r", "\r")
-            .replace("\\n", "\n")
-            .replace("\\\\", "\\")
+        val sb = StringBuilder(value.length)
+        var i = 0
+        while (i < value.length) {
+            val c = value[i]
+            if (c == '\\' && i + 1 < value.length) {
+                when (value[i + 1]) {
+                    's' -> sb.append(' ')
+                    ':' -> sb.append(';')
+                    'r' -> sb.append('\r')
+                    'n' -> sb.append('\n')
+                    '\\' -> sb.append('\\')
+                    else -> sb.append(value[i + 1]) // unknown escape: drop the backslash
+                }
+                i += 2
+            } else {
+                sb.append(c)
+                i++
+            }
+        }
+        return sb.toString()
     }
 }

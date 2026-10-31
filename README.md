@@ -33,13 +33,19 @@ Notes and assumptions
 
 ## Features
 
-- Authenticate with Twitch (OAuth flow) to access follow list and chat privileges
-- Show followed streamers and open their live chat
-- Send messages to chat (requires OAuth scopes)
-- Basic message rendering (usernames, emotes, badges)
-- Background reconnection and basic rate-limit handling
-
-(If the app has additional features such as message filtering, moderation tools, or notifications, mention them here or open an issue to request README updates.)
+- Authenticate with Twitch in-app (OAuth implicit flow in a WebView with a fresh session for every login)
+- Home screen with live followed streams (thumbnails, LIVE badge, viewer count, game)
+- Full chat: messages with badges, Twitch/BTTV/7TV/FFZ emotes, @mentions, replies, polls,
+  URL links, deleted-message handling, chatter list, user profiles, moderation (timeout/ban with confirmation)
+- Search for channels and jump straight into their chat
+- Chromecast support (local HLS proxy with an allowlisted, LAN-reachable proxy server)
+- Real-time "went live" updates via EventSub WebSocket + intelligent polling + background WorkManager
+  with notifications
+- Chat settings (suppress duplicate room-state NOTICE messages, custom msg-ids)
+- Custom dark-first Twitch-inspired design system (Chakra Petch + Lato fonts), light/dark theme
+- OAuth token stored encrypted at rest (EncryptedSharedPreferences, hardware-backed key)
+- Automatic IRC reconnect with exponential backoff
+- UI mockups of the current design live in `docs/ui-mockups/`
 
 ## Prerequisites
 
@@ -59,6 +65,11 @@ The app requires Twitch API credentials to call certain endpoints and to perform
    - Category: Application Integration or whatever fits.
 3. After creating the application you'll get a Client ID and a Client Secret. Keep these values private.
 
+The authorization page opens in an in-app WebView, not in an external browser. Its cookies and web
+storage are cleared before every login, so you can always choose the Twitch account you want to use —
+even when another account is already active in your browser. The `http://localhost:3000` redirect is
+intercepted inside the WebView, so no local HTTP server or cleartext request is needed.
+
 ## Configuration (secure)
 
 This repository previously contained an `app/credentials.txt` file. Do NOT commit secrets into source control.
@@ -71,25 +82,11 @@ Recommended secure options:
 
 ```properties
 # local.properties (local only) - DO NOT commit
-TWITCH_CLIENT_ID=your_client_id_here
+twitch.clientId=your_client_id_here
 ```
 
-- In your app's `build.gradle` or code, read them from `local.properties`. Example Gradle snippet (Kotlin DSL):
-
-```kotlin
-// in app/build.gradle.kts (example)
-val localProps = java.util.Properties().apply {
-    rootProject.file("local.properties").inputStream().use { load(it) }
-}
-val twitchClientId: String? = localProps.getProperty("TWITCH_CLIENT_ID")
-
-android {
-    defaultConfig {
-        // ...
-        buildConfigField("String", "TWITCH_CLIENT_ID", "\"${twitchClientId}\"")
-    }
-}
-```
+- `app/build.gradle.kts` reads `twitch.clientId` from `local.properties` and exposes it as
+  `BuildConfig.TWITCH_CLIENT_ID` (with an empty-string fallback when the file is missing).
 
 2) Use environment variables (CI-friendly):
 
@@ -133,12 +130,16 @@ If you run into Gradle daemon or JDK issues, open the project in Android Studio 
 
 ## Architecture
 
-A brief, inferred architecture (adapt to actual project):
-
-- UI: Android Activities / Fragments + Jetpack components for lifecycle and navigation
-- Networking: Retrofit / OkHttp or Twitch SDK for REST API calls
-- Real-time chat: IRC client or WebSocket / PubSub connection
-- Persistence: optional local cache using Room or simple in-memory cache
+- UI: Jetpack Compose (Material 3) with Navigation Compose; single-activity (`MainActivity`)
+- Theming: custom design system in `ui/theme/` (colors, Chakra Petch/Lato typography in `res/font/`, shapes)
+- Networking: Ktor client (CIO) for the Twitch Helix API and GQL, Ktor client websockets for IRC
+- Real-time chat: `ChatService` (foreground service) holding the Twitch IRC websocket,
+  with reconnect/backoff; UI observes it through `ChatViewModel` (StateFlow/SharedFlow)
+- Live-status: EventSub websocket (`EventSubManager`) + `IntelligentPollingManager` (WorkManager)
+  + `LiveStreamWorker` notifications
+- Images: Coil with memory/disk cache (configured in `MyApplication`)
+- Persistence: EncryptedSharedPreferences (token/user), SharedPreferences (settings, live-stream state)
+- Casting: Google Cast framework + `LocalProxyServer` (NanoHTTPD, allowlisted to *.ttvnw.net)
 
 ## Testing
 
@@ -165,7 +166,15 @@ A brief, inferred architecture (adapt to actual project):
 
 - Never commit Client ID/Secret or access tokens to source control.
 - Add any local-only credential files to `.gitignore`.
-- Consider rotating your Client Secret if it was accidentally committed (the repo currently contains `app/credentials.txt` with values — rotate the secret if those are valid credentials).
+- The Client ID is read from `local.properties` (not committed) and injected as a BuildConfig field.
+- The OAuth access token and user profile are stored in `EncryptedSharedPreferences`
+  (AES256-GCM, Android Keystore-backed key) — never in plaintext. Older plaintext sessions
+  in DataStore are migrated automatically on first launch and wiped.
+- The old `app/src/main/res/creds.txt` resource has been removed from the project.
+- The local cast proxy (`LocalProxyServer`) only forwards requests to `*.ttvnw.net` / `*.twitch.tv`
+  over HTTPS, so it cannot be abused as an open proxy from the LAN.
+- Release builds run R8 (minify + resource shrinking); keep rules for Ktor/serialization/Gson
+  live in `app/proguard-rules.pro`.
 
 ## Contributing
 

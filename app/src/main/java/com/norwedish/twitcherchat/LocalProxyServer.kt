@@ -37,17 +37,33 @@ object LocalProxyServer {
     // Start the local proxy on an automatically chosen free port.
     // onStarted(baseUrl) will be invoked on the main thread with a reachable base URL (http://<device-ip>:port)
     fun start(onStarted: ((baseUrl: String) -> Unit)? = null) {
-        if (server != null) {
-            onStarted?.invoke(getBaseUrl())
-            return
+        synchronized(this) {
+            if (server != null) {
+                onStarted?.invoke(getBaseUrl())
+                return
+            }
         }
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val s = NanoProxy(0)
                 s.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
-                server = s
-                port = s.listeningPort
+                var lostRaceBase: String? = null
+                synchronized(this@LocalProxyServer) {
+                    if (server != null) {
+                        // Another caller won the race: drop this instance
+                        s.stop()
+                        lostRaceBase = getBaseUrl()
+                    } else {
+                        server = s
+                        port = s.listeningPort
+                    }
+                }
+                if (lostRaceBase != null) {
+                    val base = lostRaceBase
+                    withContext(Dispatchers.Main) { onStarted?.invoke(base) }
+                    return@launch
+                }
 
                 // Determine a LAN-reachable IP address to present to Chromecast
                 val ip = findLocalIpAddress() ?: "127.0.0.1"
@@ -98,7 +114,7 @@ object LocalProxyServer {
                     if (!addr.isLoopbackAddress && addr is InetAddress) {
                         val host = addr.hostAddress
                         // prefer IPv4
-                        if (host.indexOf(':') < 0) {
+                        if (host != null && host.indexOf(':') < 0) {
                             return host
                         }
                     }
@@ -108,6 +124,18 @@ object LocalProxyServer {
             Log.w(TAG, "Failed to enumerate network interfaces: ${e.message}")
         }
         return null
+    }
+
+    /**
+     * Only Twitch CDN hosts may be proxied. This proxy is reachable from the LAN (it must be,
+     * for Chromecast), so without an allowlist any device on the network could use it as an
+     * open proxy / SSRF vector.
+     */
+    private fun isAllowedRemote(url: URL): Boolean {
+        if (url.protocol != "https") return false
+        val host = url.host.lowercase()
+        return host == "ttvnw.net" || host.endsWith(".ttvnw.net") ||
+            host == "twitch.tv" || host.endsWith(".twitch.tv")
     }
 
     private class NanoProxy(port: Int) : NanoHTTPD(port) {
@@ -133,6 +161,10 @@ object LocalProxyServer {
             val params = session.parameters
             val src = params["source"]?.firstOrNull() ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "missing source")
             val remote = java.net.URL(java.net.URLDecoder.decode(src, "UTF-8"))
+            if (!isAllowedRemote(remote)) {
+                Log.w(TAG, "Blocked non-Twitch playlist source: $remote")
+                return newFixedLengthResponse(Response.Status.FORBIDDEN, "text/plain", "host not allowed")
+            }
 
             try {
                 Log.d(TAG, "handleStream request for remote playlist: ${remote}")
@@ -157,11 +189,10 @@ object LocalProxyServer {
                 val text = conn.inputStream.bufferedReader().use { it.readText() }
                 conn.disconnect()
 
-                // Rewrite URI lines
+                // Rewrite URI lines. Always use our own address: a client-supplied Host
+                // header would otherwise poison the rewritten playlist URLs.
                 val base = remote
-                val hostHeader = session.headers["host"]
-                val host = hostHeader ?: "${findLocalIpAddress() ?: "127.0.0.1"}:$listeningPort"
-                val prefix = "http://$host"
+                val prefix = "http://${findLocalIpAddress() ?: "127.0.0.1"}:$listeningPort"
 
                 val rewritten = text.lines().joinToString(separator = "\r\n") { line ->
                     val trim = line.trim()
@@ -188,18 +219,27 @@ object LocalProxyServer {
             }
         }
 
+        // Note: upstream connections are disconnected on every path (success, error, exception).
+
         private fun handleSegment(session: IHTTPSession): Response {
             val params = session.parameters
             val enc = params["u"]?.firstOrNull() ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "missing u")
             val remoteUrl = java.net.URL(java.net.URLDecoder.decode(enc, "UTF-8"))
+            if (!isAllowedRemote(remoteUrl)) {
+                Log.w(TAG, "Blocked non-Twitch segment source: $remoteUrl")
+                return newFixedLengthResponse(Response.Status.FORBIDDEN, "text/plain", "host not allowed")
+            }
+            val conn = try {
+                remoteUrl.openConnection() as HttpURLConnection
+            } catch (e: Exception) {
+                return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "invalid url")
+            }
             try {
-                Log.d(TAG, "handleSegment request for: $remoteUrl from ${session.remoteIpAddress}; headers=${session.headers}")
-                val conn = remoteUrl.openConnection() as HttpURLConnection
+                Log.d(TAG, "handleSegment request for: $remoteUrl from ${session.remoteIpAddress}")
                 conn.instanceFollowRedirects = true
                 // Forward Range header if present
                 val range = session.headers["range"]
                 if (!range.isNullOrEmpty()) conn.setRequestProperty("Range", range)
-                if (!range.isNullOrEmpty()) Log.d(TAG, "Forwarding Range header to remote: $range")
                 // Use a browser-like User-Agent for segment requests as well
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android 10; Mobile; rv:115.0) Gecko/115.0 Firefox/115.0")
                 conn.setRequestProperty("Accept", "*/*")
@@ -213,27 +253,38 @@ object LocalProxyServer {
                 // diagnostics
                 synchronized(this@LocalProxyServer) { segmentRequestCount++ }
                 lastSegmentStatus = code
-                val contentType = conn.contentType ?: "application/octet-stream"
 
-                // Read the remote response into memory so we can return a fixed-length response
-                val bytes = conn.inputStream.use { it.readBytes() }
-                val remoteContentLength = conn.getHeaderFieldInt("Content-Length", bytes.size)
-                Log.d(TAG, "Remote Content-Length header: $remoteContentLength, buffered ${bytes.size} bytes")
-                val resp = newFixedLengthResponse(Response.Status.lookup(code), contentType, bytes.inputStream(), bytes.size.toLong())
-                // forward content-range/length if available
+                if (code !in 200..299) {
+                    // Forward the upstream error status instead of turning it into a 500
+                    val errText = try { conn.errorStream?.bufferedReader()?.use { it.readText() }?.take(500) } catch (_: Exception) { null }
+                    val msg = "fetch failed: $code ${conn.responseMessage ?: ""} ${errText ?: ""}".trim()
+                    conn.disconnect()
+                    return newFixedLengthResponse(Response.Status.lookup(code), "text/plain", msg)
+                }
+
+                val contentType = conn.contentType ?: "application/octet-stream"
+                // Stream the body in chunks instead of buffering the whole segment in memory.
+                // The wrapper disconnects the upstream connection when the stream is closed.
+                val rawStream = conn.inputStream
+                val stream = object : java.io.FilterInputStream(rawStream) {
+                    override fun close() {
+                        try { super.close() } finally { conn.disconnect() }
+                    }
+                }
+                val resp = newChunkedResponse(Response.Status.OK, contentType, stream)
                 conn.headerFields["Content-Range"]?.firstOrNull()?.let { resp.addHeader("Content-Range", it) }
                 conn.getHeaderField("Accept-Ranges")?.let { resp.addHeader("Accept-Ranges", it) }
-                // Ensure Content-Length is forwarded if available
-                try { resp.addHeader("Content-Length", bytes.size.toString()) } catch (_: Exception) {}
-                // CORS for clients that may enforce it
+                conn.getHeaderField("Content-Length")?.let { resp.addHeader("Content-Length", it) }
                 try { resp.addHeader("Access-Control-Allow-Origin", "*") } catch (_: Exception) {}
                 try { resp.addHeader("Access-Control-Allow-Headers", "Range,Content-Type") } catch (_: Exception) {}
                 Log.d(TAG, "Responding to client ${session.remoteIpAddress} with contentType=$contentType, code=$code")
                 return resp
             } catch (e: Exception) {
+                conn.disconnect()
                 Log.e(TAG, "handleSegment error: ${e.message}", e)
                 return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "segment error: ${e.message}")
             }
+            // On success the FilterInputStream wrapper disconnects when the body is fully streamed
         }
     }
 }

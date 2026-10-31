@@ -8,9 +8,6 @@ package com.norwedish.twitcherchat
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
-import android.content.ComponentName
-import android.content.ServiceConnection
-import android.os.IBinder
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -18,19 +15,19 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -39,15 +36,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChatBubble
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Badge
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,14 +52,18 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -73,12 +74,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -90,15 +95,19 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import androidx.work.*
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.norwedish.twitcherchat.ui.theme.LiveRed
 import com.norwedish.twitcherchat.ui.theme.TwitcherChatTheme
 import kotlinx.coroutines.launch
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import java.util.Locale
 
 /**
  * Simple object that centralizes route names used by the app's NavHost.
@@ -124,7 +133,6 @@ object AppRoutes {
 class MainActivity : AppCompatActivity() {
     private val mainViewModel: MainViewModel by viewModels()
 
-
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { _ ->
@@ -142,8 +150,8 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Edge-to-edge: draw behind system bars; Compose handles insets.
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         askNotificationPermission()
 
@@ -177,14 +185,41 @@ class MainActivity : AppCompatActivity() {
                     ) {
                         composable(AppRoutes.LOGIN) {
                             LoginScreen(onLoginSuccess = { token ->
-                                lifecycleScope.launch {
+                                try {
                                     val user = TwitchApi.getCurrentUser(token, UserManager.CLIENT_ID)
-                                    if (user != null) {
+                                    if (user == null) {
+                                        getString(R.string.login_failed)
+                                    } else {
                                         UserManager.login(token, user)
                                         scheduleLiveStreamWorker()
                                         navController.navigate(AppRoutes.MAIN) {
                                             popUpTo(AppRoutes.LOGIN) { inclusive = true }
                                         }
+                                        null
+                                    }
+                                } catch (e: TwitchApiException) {
+                                    Log.e(
+                                        "MainActivity",
+                                        "Login failed: HTTP ${e.status}",
+                                        e
+                                    )
+                                    if (e.status == 401) {
+                                        getString(R.string.login_failed_unauthorized)
+                                    } else {
+                                        getString(
+                                            R.string.login_failed_reason,
+                                            e.message ?: getString(R.string.login_failed)
+                                        )
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("MainActivity", "Login failed", e)
+                                    if (e is java.io.IOException) {
+                                        getString(R.string.login_failed_network)
+                                    } else {
+                                        getString(
+                                            R.string.login_failed_reason,
+                                            e.message ?: getString(R.string.login_failed)
+                                        )
                                     }
                                 }
                             })
@@ -195,30 +230,30 @@ class MainActivity : AppCompatActivity() {
                                 mainViewModel.loadFollowedStreams()
                             }
                             MainScreen(
-                                 viewModel = mainViewModel,
-                                 onStreamClick = { enrichedStream ->
-                                     navController.navigate(
-                                         AppRoutes.chatRoute(
-                                             channelName = enrichedStream.stream.userLogin,
-                                             twitchUserId = enrichedStream.stream.userId,
-                                             displayName = enrichedStream.user.displayName,
-                                             profileImageUrl = enrichedStream.user.profileImageUrl
-                                         )
-                                     )
-                                 },
-                                 onSearchClick = { navController.navigate(AppRoutes.SEARCH) },
-                                 onLogoutClick = {
-                                     scope.launch {
-                                         UserManager.logout()
-                                         cancelLiveStreamWorker()
-                                         navController.navigate(AppRoutes.LOGIN) {
-                                             popUpTo(AppRoutes.MAIN) { inclusive = true }
-                                         }
-                                     }
-                                 },
-                                 onSettingsClick = { navController.navigate(AppRoutes.SETTINGS) }
-                                 )
-                             }
+                                viewModel = mainViewModel,
+                                onStreamClick = { enrichedStream ->
+                                    navController.navigate(
+                                        AppRoutes.chatRoute(
+                                            channelName = enrichedStream.stream.userLogin,
+                                            twitchUserId = enrichedStream.stream.userId,
+                                            displayName = enrichedStream.user.displayName,
+                                            profileImageUrl = enrichedStream.user.profileImageUrl
+                                        )
+                                    )
+                                },
+                                onSearchClick = { navController.navigate(AppRoutes.SEARCH) },
+                                onLogoutClick = {
+                                    scope.launch {
+                                        UserManager.logout()
+                                        cancelLiveStreamWorker()
+                                        navController.navigate(AppRoutes.LOGIN) {
+                                            popUpTo(AppRoutes.MAIN) { inclusive = true }
+                                        }
+                                    }
+                                },
+                                onSettingsClick = { navController.navigate(AppRoutes.SETTINGS) }
+                            )
+                        }
                         composable(AppRoutes.SETTINGS) {
                             ChatSettingsScreen(onNavigateBack = { navController.popBackStack() })
                         }
@@ -280,13 +315,10 @@ class MainActivity : AppCompatActivity() {
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
-        // Create a shared callback for stream status changes
+        // Shared callback for stream status changes: refresh the home list
         val onStreamStatusChange: () -> Unit = {
-            Log.d("MainActivity", "Stream status changed, refreshing UI")
             lifecycleScope.launch {
-                // Refresh followed streams to update UI
-                val mainViewModel = viewModelStore.get(MainViewModel::class.java.name) as? MainViewModel
-                mainViewModel?.refreshFollowedStreams()
+                mainViewModel.refreshFollowedStreams()
             }
         }
 
@@ -296,25 +328,43 @@ class MainActivity : AppCompatActivity() {
         if (user != null && token != null) {
             EventSubManager.initialize(this,
                 onOnline = { userId, broadcasterName ->
-                    Log.d("MainActivity", "EventSub: $broadcasterName went live!")
                     onStreamStatusChange()
                 },
                 onOffline = { userId ->
-                    Log.d("MainActivity", "EventSub: $userId went offline")
                     onStreamStatusChange()
                 }
             )
             EventSubManager.start(user.id, token, UserManager.CLIENT_ID)
+
+            // Register all followed channels: EventSub for the first N (near-instant
+            // notifications), intelligent polling for the rest.
+            lifecycleScope.launch {
+                try {
+                    val followed = TwitchApi.getFollowedChannels(user.id, token, UserManager.CLIENT_ID)
+                    followed.forEachIndexed { index, channel ->
+                        if (index < EventSubManager.MAX_EVENTSUB_SUBSCRIPTIONS) {
+                            EventSubManager.subscribeToStreamer(channel.broadcasterId, isHighPriority = index < 10)
+                        } else {
+                            IntelligentPollingManager.addStreamerForPolling(
+                                channel.broadcasterId,
+                                channel.broadcasterLogin,
+                                channel.broadcasterName
+                            )
+                        }
+                    }
+                    Log.d("MainActivity", "Registered ${followed.size} followed channels (EventSub + polling)")
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "Failed to register followed channels: ${e.message}")
+                }
+            }
         }
 
         // Initialize Intelligent Polling for streamers beyond EventSub limit
         IntelligentPollingManager.initialize(
             onOnline = { userId, broadcasterName ->
-                Log.d("MainActivity", "Polling: $broadcasterName went live!")
                 onStreamStatusChange()
             },
             onOffline = { userId ->
-                Log.d("MainActivity", "Polling: $userId went offline")
                 onStreamStatusChange()
             }
         )
@@ -369,8 +419,8 @@ class MainActivity : AppCompatActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 /**
- * The main screen composable that aggregates the home UI: stream list, app bar and navigation actions.
- * It obtains state from the provided MainViewModel and exposes callbacks for navigation and actions.
+ * The main screen composable that shows the list of live followed channels, the app bar
+ * and navigation actions. State comes from the provided MainViewModel.
  */
 @Composable
 fun MainScreen(
@@ -380,9 +430,10 @@ fun MainScreen(
     onLogoutClick: () -> Unit,
     onSettingsClick: () -> Unit
 ) {
-    val context = LocalContext.current
-    val streams by viewModel.followedStreams
-    val isLoading by viewModel.isLoading
+    val streams by viewModel.followedStreams.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
+    val followedChannelCount by viewModel.followedChannelCount.collectAsState()
     val currentUser = UserManager.currentUser
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -392,54 +443,89 @@ fun MainScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Image(
-                            painter = painterResource(id = R.drawable.logo),
-                            contentDescription = "App Logo",
-                            modifier = Modifier.size(40.dp),
-                            contentScale = ContentScale.Fit
+                            painter = painterResource(id = R.drawable.transparentlogo),
+                            contentDescription = null,
+                            modifier = Modifier.size(34.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(text = "Twitcher Chat", style = MaterialTheme.typography.titleLarge)
-                            if (currentUser != null) {
-                                Row(
-                                    modifier = Modifier.clickable { menuExpanded = true },
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    AsyncImage(
-                                        model = currentUser.profileImageUrl,
-                                        contentDescription = "User Avatar",
-                                        modifier = Modifier.size(24.dp).clip(CircleShape),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                    Text(
-                                        text = currentUser.displayName,
-                                        style = MaterialTheme.typography.titleSmall
-                                    )
-                                    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                                        DropdownMenuItem(
-                                            text = { Text("Log Out") },
-                                            onClick = {
-                                                menuExpanded = false
-                                                onLogoutClick()
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.titleLarge
+                        )
                     }
                 },
                 actions = {
-                    IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    if (currentUser != null) {
+                        Box {
+                            IconButton(onClick = { menuExpanded = true }) {
+                                AsyncImage(
+                                    model = currentUser.profileImageUrl,
+                                    contentDescription = currentUser.displayName,
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false }
+                            ) {
+                                // Show which account is signed in: a wrong account is the
+                                // number one reason for "I don't see my followed channels".
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(
+                                                text = currentUser.displayName,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = "@${currentUser.login}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    onClick = {},
+                                    enabled = false
+                                )
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.log_out)) },
+                                    leadingIcon = {
+                                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onLogoutClick()
+                                    }
+                                )
+                            }
+                        }
                     }
-                }
+                    IconButton(onClick = onSettingsClick) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.settings)
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onSearchClick) {
-                Icon(Icons.Default.Search, contentDescription = "Search for a streamer")
+            FloatingActionButton(
+                onClick = onSearchClick,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary
+            ) {
+                Icon(
+                    Icons.Default.Search,
+                    contentDescription = stringResource(R.string.search_streamers)
+                )
             }
         }
     ) { paddingValues ->
@@ -448,30 +534,67 @@ fun MainScreen(
             onRefresh = { viewModel.loadFollowedStreams() },
             modifier = Modifier.padding(paddingValues)
         ) {
-            if (streams.isEmpty() && !isLoading) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                        .verticalScroll(rememberScrollState()),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "No followed channels are currently live. Pull down to refresh.",
-                        textAlign = TextAlign.Center
+            when {
+                isLoading && streams.isEmpty() -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
+
+                errorMessage != null && streams.isEmpty() -> {
+                    EmptyState(
+                        icon = Icons.Default.ErrorOutline,
+                        title = stringResource(R.string.error_loading),
+                        subtitle = errorMessage,
+                        actionLabel = stringResource(R.string.retry),
+                        onAction = { viewModel.loadFollowedStreams() }
                     )
                 }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(streams, key = { it.stream.id }) { stream ->
-                        StreamCard(
-                            stream = stream,
-                            onClick = { onStreamClick(stream) }
-                        )
+
+                streams.isEmpty() -> {
+                    EmptyState(
+                        icon = Icons.Default.VideocamOff,
+                        title = stringResource(R.string.no_live_streams),
+                        subtitle = followedChannelCount?.let { count ->
+                            if (count == 0) stringResource(R.string.follows_empty)
+                            else stringResource(R.string.follows_none_live, count)
+                        } ?: stringResource(R.string.pull_to_refresh_hint),
+                        actionLabel = stringResource(R.string.refresh),
+                        onAction = { viewModel.loadFollowedStreams() }
+                    )
+                }
+
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        errorMessage?.let { message ->
+                            item {
+                                RefreshErrorBanner(
+                                    message = message,
+                                    onRetry = { viewModel.loadFollowedStreams() }
+                                )
+                            }
+                        }
+                        item {
+                            Text(
+                                text = stringResource(R.string.live_now_count, streams.size),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(bottom = 2.dp)
+                            )
+                        }
+                        items(streams, key = { it.stream.id }) { stream ->
+                            StreamCard(
+                                stream = stream,
+                                onClick = { onStreamClick(stream) }
+                            )
+                        }
                     }
                 }
             }
@@ -479,64 +602,214 @@ fun MainScreen(
     }
 }
 
-private fun formatViewerCount(count: Int): String {
-    return when {
-        count >= 1_000_000 -> String.format(Locale.ROOT, "%.1fM", count / 1_000_000f)
-        count >= 1_000 -> String.format(Locale.ROOT, "%.1fK", count / 1_000f)
-        else -> count.toString()
-    }
-}
-
+/**
+ * Card for a live followed stream: 16:9 thumbnail with LIVE badge and viewer count overlay,
+ * plus avatar, display name, stream title and game chip below.
+ */
 @Composable
 fun StreamCard(stream: EnrichedStream, onClick: () -> Unit) {
+    val thumbnailUrl = remember(stream.stream.thumbnailUrl) {
+        stream.stream.thumbnailUrl
+            .replace("{width}", "640")
+            .replace("{height}", "360")
+    }
+
     Card(
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics {
+                contentDescription =
+                    "${stream.user.displayName}, live, ${stream.stream.title}, ${formatViewerCount(stream.stream.viewerCount)} viewers"
+            },
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
     ) {
-        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                AsyncImage(
-                    model = stream.user.profileImageUrl,
-                    contentDescription = "Streamer avatar",
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+        Box {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(thumbnailUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f),
+                contentScale = ContentScale.Crop
+            )
+            // Gradient scrim so the overlays stay readable
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Black.copy(alpha = 0.25f),
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.45f)
+                            )
+                        )
+                    )
+            )
+            // LIVE badge
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(10.dp),
+                color = LiveRed,
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(
+                        text = stringResource(R.string.live),
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                }
+            }
+            // Viewer count
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(10.dp),
+                color = Color.Black.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Icon(
-                        imageVector = Icons.Default.Person,
-                        contentDescription = "Viewers",
-                        modifier = Modifier.size(16.dp),
-                        tint = Color.Red
+                        imageVector = Icons.Default.Visibility,
+                        contentDescription = stringResource(R.string.viewers_content_description),
+                        modifier = Modifier.size(13.dp),
+                        tint = Color.White
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = formatViewerCount(stream.stream.viewerCount),
+                        color = Color.White,
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
-            Spacer(modifier = Modifier.width(16.dp))
-            Column {
+        }
+
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (stream.user.profileImageUrl.isBlank()) {
+                // Fallback avatar when the profile request failed (e.g. rate limit)
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = stream.user.displayName.take(1).uppercase(),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            } else {
+                AsyncImage(
+                    model = stream.user.profileImageUrl,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = stream.user.displayName,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp
+                    fontSize = 17.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = stream.stream.title,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+
+        if (stream.stream.gameName.isNotBlank()) {
+            Surface(
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = RoundedCornerShape(8.dp)
+            ) {
                 Text(
                     text = stream.stream.gameName,
-                    fontSize = 14.sp
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Compact banner shown above the list when a refresh failed but we still have channels to show.
+ * Without this, a failed refresh would silently look like "nothing changed".
+ */
+@Composable
+private fun RefreshErrorBanner(message: String, onRetry: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                Icons.Default.ErrorOutline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onRetry) {
+                Text(stringResource(R.string.retry))
             }
         }
     }

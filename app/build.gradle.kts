@@ -1,5 +1,4 @@
 import java.util.Properties
-import java.io.FileInputStream
 
 plugins {
     alias(libs.plugins.android.application)
@@ -8,10 +7,11 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-val localProperties = Properties() // You can now use the shortened 'Properties'
+// Client ID lives in local.properties (never committed) so secrets stay out of source control.
+val localProperties = Properties()
 val localPropertiesFile = rootProject.file("local.properties")
 if (localPropertiesFile.exists()) {
-    localProperties.load(FileInputStream(localPropertiesFile)) // You can now use the shortened 'FileInputStream'
+    localProperties.load(localPropertiesFile.inputStream())
 }
 
 android {
@@ -21,7 +21,7 @@ android {
     packaging {
         resources {
             excludes += "META-INF/INDEX.LIST"
-            resources.excludes.add("META-INF/io.netty.versions.properties")
+            excludes += "META-INF/io.netty.versions.properties"
         }
     }
 
@@ -29,19 +29,22 @@ android {
         applicationId = "com.norwedish.twitcherchat"
         minSdk = 28
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Haal de waarde op uit local.properties
-        val twitchClientId = localProperties.getProperty("twitch.clientId")
-        buildConfigField("String", "TWITCH_CLIENT_ID", "$twitchClientId")
+        // Fall back to an empty string instead of the literal "null" when local.properties is missing.
+        // Strip optional surrounding quotes so the value is always a valid Java string literal.
+        val rawClientId = localProperties.getProperty("twitch.clientId")?.trim().orEmpty()
+        val twitchClientId = rawClientId.removeSurrounding("\"")
+        buildConfigField("String", "TWITCH_CLIENT_ID", "\"$twitchClientId\"")
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -62,60 +65,53 @@ android {
 }
 
 dependencies {
+    // Networking (Twitch Helix API + IRC websocket + embedded login server)
+    implementation(libs.ktor.client.android)
+    implementation(libs.ktor.client.cio)
+    implementation(libs.ktor.client.content.negotiation)
+    implementation(libs.ktor.client.websockets)
+    implementation(libs.ktor.serialization.kotlinx.json)
+    implementation(libs.kotlinx.serialization.json)
 
-    // Voor netwerkverzoeken (API calls)
-    implementation("io.ktor:ktor-client-android:2.3.12")
-    implementation("io.ktor:ktor-client-content-negotiation:2.3.12")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.12")
-    implementation("io.ktor:ktor-server-core:2.3.12")
-    implementation("io.ktor:ktor-server-netty:2.3.12")
-    implementation("io.ktor:ktor-client-websockets:2.3.12")
-    implementation("io.ktor:ktor-client-cio:2.3.12")
+    // Embedded lightweight HTTP server for the in-app local proxy (device-local)
+    implementation(libs.nanohttpd)
 
-    // Embedded lightweight HTTP server for in-app local proxy (device-local)
-    implementation("org.nanohttpd:nanohttpd:2.3.1")
+    // Background work (live-stream polling)
+    implementation(libs.androidx.work.runtime)
 
-    // Voor het openen van de Twitch login pagina in een browser tab
-    implementation("androidx.browser:browser:1.8.0")
+    // Legacy DataStore, only used once to migrate the old plaintext session into encrypted storage
+    implementation(libs.androidx.datastore)
 
-    // WorkManager
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
+    // Encrypted at-rest storage for the OAuth token and user profile
+    implementation(libs.androidx.security.crypto)
 
-    // DataStore
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation(libs.gson)
 
-    implementation("com.google.code.gson:gson:2.10.1")
-
-    implementation("io.coil-kt:coil-compose:2.6.0")
-    implementation("io.coil-kt:coil-gif:2.6.0")
-
-    // Accompanist for Swipe-to-Refresh
-    implementation("com.google.accompanist:accompanist-swiperefresh:0.34.0")
-
+    // Image loading with memory/disk caching (configured in MyApplication)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.gif)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    // Lifecycle ViewModel integration for Jetpack Compose
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.1")
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation("androidx.compose.material:material-icons-extended") // Add this line
-    implementation("androidx.compose.material:material")
-    // Navigation for Jetpack Compose
-    implementation("androidx.navigation:navigation-compose:2.7.0")
-    implementation("androidx.appcompat:appcompat:1.6.1")
-    // MediaRouter for Chromecast UI (MediaRouteButton)
-    implementation("androidx.mediarouter:mediarouter:1.2.3")
-    // Google Cast framework
-    implementation("com.google.android.gms:play-services-cast-framework:21.2.0")
+    implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.appcompat)
+    // MediaRouter for the Chromecast MediaRouteButton
+    implementation(libs.androidx.mediarouter)
+    implementation(libs.cast.framework)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

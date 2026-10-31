@@ -1,12 +1,17 @@
 package com.norwedish.twitcherchat
 
 /**
- * Centralized manager for user session/state: stores access tokens, current user, and persistence.
- * Used across app components to read or update authentication state.
+ * Centralized manager for user session/state: stores the access token and current user.
+ *
+ * Security: the OAuth token and user profile are stored in EncryptedSharedPreferences
+ * (AES256-GCM via a hardware-backed Android Keystore key), never in plaintext.
+ * On first launch after this change, any session stored in the legacy plaintext
+ * DataStore is migrated into the encrypted store and then removed.
  */
 
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -15,22 +20,32 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "twitch_app_prefs")
+// Legacy plaintext store, only read once for migration purposes.
+private val Context.legacyDataStore: DataStore<Preferences> by preferencesDataStore(name = "twitch_app_prefs")
 
 object UserManager {
     // Broadcast actions to notify services/components about login/logout events
     const val ACTION_USER_LOGGED_IN = "com.norwedish.twitcherchat.ACTION_USER_LOGGED_IN"
     const val ACTION_USER_LOGGED_OUT = "com.norwedish.twitcherchat.ACTION_USER_LOGGED_OUT"
 
+    private const val SECURE_PREFS_NAME = "twitch_secure_prefs"
+    private const val KEY_ACCESS_TOKEN = "access_token"
+    private const val KEY_CURRENT_USER = "current_user"
+
     // Keep a reference to application context (set in init) for broadcasting events
     private var appContext: Context? = null
 
-    private val ACCESS_TOKEN = stringPreferencesKey("access_token")
-    private val CURRENT_USER = stringPreferencesKey("current_user")
+    private var securePrefs: SharedPreferences? = null
     private val gson = Gson()
 
     val CLIENT_ID = BuildConfig.TWITCH_CLIENT_ID
@@ -41,23 +56,54 @@ object UserManager {
     var isLoading: Boolean by mutableStateOf(true)
         private set
 
-    private var _dataStore: DataStore<Preferences>? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    @Suppress("DEPRECATION") // security-crypto 1.1.0 marks these deprecated in favor of Tink; still fully functional
     fun init(context: Context) {
-        _dataStore = context.dataStore
         appContext = context.applicationContext
+        val masterKey = MasterKey.Builder(context.applicationContext)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        securePrefs = EncryptedSharedPreferences.create(
+            context.applicationContext,
+            SECURE_PREFS_NAME,
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
         scope.launch(Dispatchers.IO) {
-            val prefs = _dataStore?.data?.first()
-            val token = prefs?.get(ACCESS_TOKEN)
-            val userJson = prefs?.get(CURRENT_USER)
+            migrateFromLegacyDataStore(context.applicationContext)
+            val prefs = securePrefs
+            val token = prefs?.getString(KEY_ACCESS_TOKEN, null)
+            val userJson = prefs?.getString(KEY_CURRENT_USER, null)
             withContext(Dispatchers.Main) {
                 accessToken = token
                 if (userJson != null) {
-                    currentUser = gson.fromJson(userJson, TwitchUser::class.java)
+                    currentUser = runCatching { gson.fromJson(userJson, TwitchUser::class.java) }.getOrNull()
                 }
                 isLoading = false
             }
+        }
+    }
+
+    /**
+     * One-time migration: if the encrypted store is empty but the legacy DataStore holds a
+     * session, copy it over and wipe the legacy store so the token is never stored in plaintext.
+     */
+    private suspend fun migrateFromLegacyDataStore(context: Context) {
+        val prefs = securePrefs ?: return
+        if (prefs.contains(KEY_ACCESS_TOKEN)) return
+        val legacy = context.legacyDataStore.data.first()
+        val tokenKey = stringPreferencesKey(KEY_ACCESS_TOKEN)
+        val userKey = stringPreferencesKey(KEY_CURRENT_USER)
+        val token = legacy[tokenKey]
+        val userJson = legacy[userKey]
+        if (token != null || userJson != null) {
+            prefs.edit().apply {
+                if (token != null) putString(KEY_ACCESS_TOKEN, token)
+                if (userJson != null) putString(KEY_CURRENT_USER, userJson)
+            }.apply()
+            runCatching { context.legacyDataStore.edit { it.clear() } }
         }
     }
 
@@ -66,10 +112,10 @@ object UserManager {
             accessToken = token
             currentUser = user
         }
-        _dataStore?.edit { settings ->
-            settings[ACCESS_TOKEN] = token
-            settings[CURRENT_USER] = gson.toJson(user)
-        }
+        securePrefs?.edit()?.apply {
+            putString(KEY_ACCESS_TOKEN, token)
+            putString(KEY_CURRENT_USER, gson.toJson(user))
+        }?.apply()
         // Notify listeners that a user logged in
         try {
             appContext?.sendBroadcast(Intent(ACTION_USER_LOGGED_IN))
@@ -81,9 +127,7 @@ object UserManager {
         withContext(Dispatchers.Main) {
             currentUser = updatedUser
         }
-        _dataStore?.edit { settings ->
-            settings[CURRENT_USER] = gson.toJson(updatedUser)
-        }
+        securePrefs?.edit()?.putString(KEY_CURRENT_USER, gson.toJson(updatedUser))?.apply()
     }
 
     suspend fun logout() {
@@ -96,9 +140,7 @@ object UserManager {
             accessToken = null
             currentUser = null
         }
-        _dataStore?.edit {
-            it.clear()
-        }
+        securePrefs?.edit()?.clear()?.apply()
         // Notify listeners that user logged out
         try {
             appContext?.sendBroadcast(Intent(ACTION_USER_LOGGED_OUT))

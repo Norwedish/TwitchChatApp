@@ -110,10 +110,10 @@ object IntelligentPollingManager {
 
         val now = System.currentTimeMillis()
 
-        // Find streamers that need to be polled
+        // Find streamers that need to be polled (most overdue first)
         val streamersToCheck = pollingState.values
             .filter { now - it.lastChecked >= it.pollIntervalMs }
-            .sortedByDescending { it.lastChecked } // Check recently checked ones first
+            .sortedBy { it.lastChecked }
             .take(BATCH_SIZE)
 
         if (streamersToCheck.isEmpty()) {
@@ -128,8 +128,10 @@ object IntelligentPollingManager {
             val liveStreams = try {
                 TwitchApi.getStreamsForUsers(userIds, token, clientId)
             } catch (e: Exception) {
+                // On a failed request, do NOT update any state: otherwise every live
+                // streamer would fire a false "offline" callback.
                 Log.e(TAG, "Failed to fetch stream status: ${e.message}")
-                emptyList()
+                return
             }
 
             val liveUserIds = liveStreams.map { it.userId }.toSet()

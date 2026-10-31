@@ -234,25 +234,34 @@ object EmoteManager {
         Log.d(TAG, "========================================")
     }
 
+    /**
+     * Finds third-party emotes in a message. Matches whole words only (so a code like "cat"
+     * no longer matches inside "category") and looks codes up in a map instead of scanning
+     * every emote per message.
+     */
     fun parseThirdPartyEmotes(message: String): List<ParsedEmote> {
-        val foundEmotes = mutableListOf<ParsedEmote>()
+        if (message.isEmpty()) return emptyList()
         val thirdPartyEmotes = getAllEmotes().filter {
             it.provider == EmoteProvider.BTTV || it.provider == EmoteProvider.SEVENTV || it.provider == EmoteProvider.FRANKENFACEZ
         }
+        if (thirdPartyEmotes.isEmpty()) return emptyList()
 
-        val words = message.split(' ').toSet()
+        val emoteByCode = thirdPartyEmotes.associateBy { it.code }
+        val found = mutableListOf<ParsedEmote>()
 
-        for (emote in thirdPartyEmotes) {
-            if (words.contains(emote.code)) {
-                var startIndex = message.indexOf(emote.code, 0)
-                while (startIndex >= 0) {
-                     val endIndex = startIndex + emote.code.length - 1
-                     foundEmotes.add(ParsedEmote(emote, startIndex, endIndex))
-                     startIndex = message.indexOf(emote.code, startIndex + 1)
+        var index = 0
+        while (index < message.length) {
+            while (index < message.length && message[index] == ' ') index++
+            val start = index
+            while (index < message.length && message[index] != ' ') index++
+            if (start < index) {
+                val word = message.substring(start, index)
+                emoteByCode[word]?.let { emote ->
+                    found.add(ParsedEmote(emote, start, index - 1))
                 }
             }
         }
-        return foundEmotes
+        return found.sortedBy { it.startIndex }
     }
 
 

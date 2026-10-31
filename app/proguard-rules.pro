@@ -1,21 +1,44 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Keep line numbers for readable release crash reports
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# --- kotlinx.serialization (Twitch API models) ---
+-keepattributes *Annotation*, InnerClasses, Signature, AnnotationDefault
+-dontnote kotlinx.serialization.**
+-keepclassmembers class kotlinx.serialization.json.** {
+    *** Companion;
+}
+-keepclasseswithmembers class kotlinx.serialization.json.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
+-keep,includedescriptorclasses class com.norwedish.twitcherchat.**$$serializer { *; }
+-keepclassmembers class com.norwedish.twitcherchat.** {
+    *** Companion;
+}
+-keepclasseswithmembers class com.norwedish.twitcherchat.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# --- Gson (user profile is serialized with Gson) ---
+-keep class com.norwedish.twitcherchat.TwitchUser { *; }
+-keepclassmembers class com.norwedish.twitcherchat.TwitchUser { *; }
+-keep class com.google.gson.** { *; }
+-dontwarn com.google.gson.**
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# --- Ktor client ---
+-keep class io.ktor.** { *; }
+-dontwarn io.ktor.**
+-dontwarn org.slf4j.**
+-dontwarn reactor.blockhound.**
+
+# --- NanoHTTPD local proxy ---
+-keep class fi.iki.elonen.** { *; }
+-dontwarn fi.iki.elonen.**
+
+# --- Coil / OkHttp ---
+-dontwarn okhttp3.**
+-dontwarn okio.**
+
+# --- Google Cast framework ---
+-keep class com.google.android.gms.cast.** { *; }
+-dontwarn com.google.android.gms.**

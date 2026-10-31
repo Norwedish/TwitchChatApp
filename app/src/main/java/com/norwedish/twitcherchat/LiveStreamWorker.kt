@@ -9,9 +9,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 class LiveStreamWorker(private val appContext: Context, workerParams: WorkerParameters) : CoroutineWorker(appContext, workerParams) {
 
@@ -41,8 +38,8 @@ class LiveStreamWorker(private val appContext: Context, workerParams: WorkerPara
             val knownLiveStreams = LiveStreamStateManager.getKnownLiveStreams(appContext)
 
             // On the very first run, just save the current state without notifying
-            if (knownLiveStreams.isEmpty() && liveStreams.isNotEmpty()) {
-                Log.d(TAG, "First poll run with live streams. Saving initial state.")
+            if (!LiveStreamStateManager.isInitialized(appContext)) {
+                Log.d(TAG, "First poll run. Saving initial state.")
                 LiveStreamStateManager.updateKnownLiveStreams(appContext, liveStreamIds)
                 return Result.success()
             }
@@ -66,10 +63,8 @@ class LiveStreamWorker(private val appContext: Context, workerParams: WorkerPara
             Result.success()
         } catch (e: Exception) {
             if (e.message?.contains("401") == true) {
-                // If token is invalid, log out the user
-                CoroutineScope(Dispatchers.IO).launch {
-                    UserManager.logout()
-                }
+                // If token is invalid, log out the user (doWork is a suspend function)
+                UserManager.logout()
                 return Result.success()
             }
             Log.e(TAG, "Error during polling", e)
@@ -94,7 +89,8 @@ class LiveStreamWorker(private val appContext: Context, workerParams: WorkerPara
             putExtra("profileImageUrl", stream.thumbnailUrl)
         }
 
-        val pendingIntent = PendingIntent.getActivity(appContext, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        // Unique request code per stream so each notification opens its own channel
+        val pendingIntent = PendingIntent.getActivity(appContext, stream.userId.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
             .setContentTitle("${stream.userName} is now live!")

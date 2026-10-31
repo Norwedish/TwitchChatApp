@@ -26,7 +26,9 @@ import io.ktor.websocket.readText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -37,11 +39,12 @@ import java.util.concurrent.atomic.AtomicLong
 object EventSubManager {
     private const val TAG = "EventSubManager"
 
-    // EventSub WebSocket endpoint
-    private const val EVENTSUB_WS_URL = "wss://eventsub-beta.wss.twitch.tv"
+    // EventSub WebSocket endpoint (production). Note the /ws path: connecting to the bare
+    // host is rejected by Twitch with HTTP 403 during the handshake.
+    private const val EVENTSUB_WS_URL = "wss://eventsub.wss.twitch.tv/ws"
 
     // Subscription limits and tuning
-    private const val MAX_EVENTSUB_SUBSCRIPTIONS = 100 // Conservative limit for stability
+    const val MAX_EVENTSUB_SUBSCRIPTIONS = 100 // Conservative limit for stability
     private const val RAPID_POLL_INTERVAL = 5_000L // 5 seconds when actively watching
     private const val NORMAL_POLL_INTERVAL = 30_000L // 30 seconds for idle monitoring
     private const val IDLE_POLL_INTERVAL = 120_000L // 2 minutes for non-priority streamers
@@ -54,6 +57,8 @@ object EventSubManager {
     // State management
     private var webSocketScope: CoroutineScope? = null
     private var webSocketClient: HttpClient? = null
+    @Volatile
+    private var currentSessionId: String? = null
     private val activeSubscriptions = ConcurrentHashMap<String, Long>() // broadcasterId -> subscriptionTime
     private val polledStreamers = ConcurrentHashMap<String, Long>() // userId -> lastPollTime
     private val lastStatusCheck = AtomicLong(0)
@@ -79,6 +84,9 @@ object EventSubManager {
      * Start EventSub WebSocket connection
      */
     fun start(userId: String, token: String, clientId: String) {
+        stop() // never leak a previous connection when start() is called again
+        eventSubEnabled = true
+        eventSubFailureCount = 0
         if (!eventSubEnabled) {
             Log.d(TAG, "EventSub is disabled. Skipping connection.")
             return
@@ -99,21 +107,31 @@ object EventSubManager {
 
         webSocketScope?.launch {
             var reconnectAttempts = 0
-            val maxReconnectAttempts = 2 // Reduced from 3
+            var currentUrl = EVENTSUB_WS_URL
 
-            while (reconnectAttempts < maxReconnectAttempts && eventSubEnabled) {
+            while (eventSubEnabled && isActive) {
                 try {
-                    Log.d(TAG, "Attempting EventSub connection (attempt ${reconnectAttempts + 1}/$maxReconnectAttempts)")
-                    connectAndListenToEventSub(userId, token, clientId)
-                    reconnectAttempts = 0 // Reset on successful connection
-                    eventSubFailureCount = 0
+                    Log.d(TAG, "Attempting EventSub connection (attempt ${reconnectAttempts + 1}) to $currentUrl")
+                    val sessionEstablished = connectAndListenToEventSub(userId, token, clientId, currentUrl)
+                    if (sessionEstablished) {
+                        reconnectAttempts = 0 // Reset on successful session
+                        eventSubFailureCount = 0
+                    } else {
+                        // Connection closed without ever establishing a session
+                        reconnectAttempts++
+                    }
+                } catch (e: SessionReconnectException) {
+                    // Twitch asked us to move to a new URL: reconnect there immediately
+                    currentUrl = e.reconnectUrl ?: EVENTSUB_WS_URL
+                    reconnectAttempts = 0
+                    continue
                 } catch (e: CancellationException) {
                     Log.d(TAG, "EventSub connection cancelled")
                     break
                 } catch (e: Exception) {
                     reconnectAttempts++
                     eventSubFailureCount++
-                    Log.e(TAG, "EventSub connection error (attempt $reconnectAttempts/$maxReconnectAttempts, failures: $eventSubFailureCount): ${e.message}")
+                    Log.e(TAG, "EventSub connection error (attempt $reconnectAttempts, failures: $eventSubFailureCount): ${e.message}")
 
                     // Disable EventSub if too many failures
                     if (eventSubFailureCount >= MAX_FAILURES_BEFORE_DISABLE) {
@@ -121,17 +139,14 @@ object EventSubManager {
                         eventSubEnabled = false
                         break
                     }
-
-                    if (reconnectAttempts >= maxReconnectAttempts) {
-                        Log.e(TAG, "EventSub connection failed after $maxReconnectAttempts attempts. Will retry on next app start.")
-                        break
-                    }
-
-                    // Short backoff: 3s, 6s
-                    val backoffDelay = 3000L * (1 shl (reconnectAttempts - 1))
-                    Log.d(TAG, "Retrying EventSub connection in ${backoffDelay}ms...")
-                    delay(backoffDelay)
                 }
+
+                if (!eventSubEnabled || !isActive) break
+
+                // Backoff before retrying: 3s, 6s, 12s, 24s, capped at 60s
+                val backoffDelay = (3000L shl minOf(reconnectAttempts - 1, 4)).coerceAtMost(60_000L)
+                Log.d(TAG, "Retrying EventSub connection in ${backoffDelay}ms...")
+                delay(backoffDelay)
             }
         }
     }
@@ -141,16 +156,16 @@ object EventSubManager {
      */
     fun stop() {
         Log.d(TAG, "Stopping EventSub connection")
-        webSocketScope?.launch {
-            try {
-                webSocketClient?.close()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error closing WebSocket: ${e.message}")
-            }
-        }
+        webSocketScope?.cancel() // cancel the read loop first so it cannot reconnect
         webSocketScope = null
+        try {
+            webSocketClient?.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing WebSocket client: ${e.message}")
+        }
         webSocketClient = null
         activeSubscriptions.clear()
+        currentSessionId = null
     }
 
     /**
@@ -170,14 +185,24 @@ object EventSubManager {
                 polledStreamers[broadcasterId] = System.currentTimeMillis()
                 Log.d(TAG, "Added to polling queue due to EventSub limit (polling: ${polledStreamers.size})")
             } else {
-                // For high priority, evict oldest low-priority subscription
+                // For high priority, evict the oldest subscription
                 val oldestEntry = activeSubscriptions.minByOrNull { it.value }
-                if (oldestEntry != null && !isHighPriority) {
+                if (oldestEntry != null) {
                     activeSubscriptions.remove(oldestEntry.key)
                     polledStreamers[oldestEntry.key] = System.currentTimeMillis()
                     activeSubscriptions[broadcasterId] = System.currentTimeMillis()
                     Log.d(TAG, "Evicted ${oldestEntry.key} from EventSub, added to polling")
                 }
+            }
+        }
+
+        // If a websocket session is already active, create the Helix subscription right away
+        val sid = currentSessionId
+        val token = UserManager.accessToken
+        val scope = webSocketScope
+        if (sid != null && token != null && scope != null) {
+            scope.launch {
+                TwitchApi.createEventSubSubscription(sid, broadcasterId, token, UserManager.CLIENT_ID)
             }
         }
     }
@@ -209,18 +234,17 @@ object EventSubManager {
     private suspend fun connectAndListenToEventSub(
         userId: String,
         token: String,
-        clientId: String
-    ) {
-        val client = webSocketClient ?: return
+        clientId: String,
+        url: String = EVENTSUB_WS_URL
+    ): Boolean {
+        val client = webSocketClient ?: return false
 
+        var sessionEstablished = false
         try {
-            Log.d(TAG, "Attempting to connect to EventSub WebSocket at $EVENTSUB_WS_URL")
+            Log.d(TAG, "Attempting to connect to EventSub WebSocket at $url")
 
-            client.wss(EVENTSUB_WS_URL) {
+            client.wss(url) {
                 Log.d(TAG, "Connected to EventSub WebSocket")
-
-                // Listen for welcome message to get session ID
-                var sessionId: String? = null
 
                 // Listen to incoming messages
                 try {
@@ -228,7 +252,7 @@ object EventSubManager {
                         if (message is Frame.Text) {
                             val text = message.readText()
                             handleEventSubMessage(text, userId, token, clientId) { newSessionId ->
-                                sessionId = newSessionId
+                                sessionEstablished = true
                             }
                         }
                     }
@@ -244,12 +268,16 @@ object EventSubManager {
             Log.e(TAG, "WebSocket connection error: ${e.message}", e)
             throw e
         }
+        return sessionEstablished
     }
 
     /**
      * Handle incoming EventSub messages
      */
-    private fun handleEventSubMessage(
+    /** Thrown when Twitch sends session_reconnect; carries the new URL to connect to. */
+    private class SessionReconnectException(val reconnectUrl: String?) : Exception("session_reconnect")
+
+    private suspend fun handleEventSubMessage(
         messageText: String,
         userId: String,
         token: String,
@@ -269,8 +297,11 @@ object EventSubManager {
                 "session_welcome" -> {
                     val sessionId = metadata?.get("session_id")?.jsonPrimitive?.content
                     if (sessionId != null) {
+                        currentSessionId = sessionId
                         onSessionId(sessionId)
                         Log.d(TAG, "Session established: $sessionId")
+                        // Actually create the Helix subscriptions on this websocket session
+                        createSubscriptionsForSession(sessionId, token, clientId)
                     }
                 }
 
@@ -305,12 +336,31 @@ object EventSubManager {
                 }
 
                 "session_reconnect" -> {
-                    Log.d(TAG, "Reconnect requested")
-                    throw Exception("Session reconnect requested")
+                    val url = jsonObj["payload"]?.jsonObject?.get("reconnect_url")?.jsonPrimitive?.content
+                    Log.d(TAG, "Reconnect requested, new URL: $url")
+                    throw SessionReconnectException(url)
                 }
             }
+        } catch (e: SessionReconnectException) {
+            throw e // must escape so the connect loop can switch to the new URL
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Error parsing EventSub message: ${e.message}")
+        }
+    }
+
+    /** Creates Helix EventSub subscriptions for every tracked broadcaster on the new session. */
+    private suspend fun createSubscriptionsForSession(sessionId: String, token: String, clientId: String) {
+        val ids = activeSubscriptions.keys.toList()
+        Log.d(TAG, "Creating ${ids.size} EventSub subscriptions for session $sessionId")
+        for (broadcasterId in ids) {
+            try {
+                val ok = TwitchApi.createEventSubSubscription(sessionId, broadcasterId, token, clientId)
+                if (!ok) Log.w(TAG, "Failed to subscribe to $broadcasterId on session $sessionId")
+            } catch (e: Exception) {
+                Log.w(TAG, "Subscription creation failed for $broadcasterId: ${e.message}")
+            }
         }
     }
 }

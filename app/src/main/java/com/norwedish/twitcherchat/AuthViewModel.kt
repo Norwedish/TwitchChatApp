@@ -1,43 +1,40 @@
 package com.norwedish.twitcherchat
 
 /**
- * ViewModel that orchestrates the OAuth login flow and exposes login state to the UI.
- * Responsible for starting/stopping the embedded `LoginServer` and delivering tokens to callers.
+ * Twitch OAuth (implicit grant) configuration for the in-app login.
+ *
+ * The authorization page is shown in [TwitchLoginWebView]. Twitch redirects to
+ * [redirectUri] with the token in the URL fragment; the WebView intercepts that navigation
+ * before any network request is made, so no local HTTP server and no cleartext traffic are
+ * needed.
  */
 
-import android.content.Context
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.lifecycle.ViewModel
-import androidx.core.net.toUri
 
 class AuthViewModel : ViewModel() {
 
-    // Gebruik je echte Client ID hier
     private val clientId: String = BuildConfig.TWITCH_CLIENT_ID
-    // Let op: De redirect URI is nu een echte, werkende URL voor onze lokale server
-    private val redirectUri = "http://localhost:3000"
 
-    fun startLoginFlow(context: Context, onTokenReceived: (String) -> Unit) {
-        // 1. Start onze lokale server die luistert naar de redirect
-        LoginServer.start {
-            onTokenReceived(it)
-            stopLoginFlow()
-        }
+    /** Redirect URI registered for the Twitch application. Intercepted by the WebView. */
+    val redirectUri: String = "http://localhost:3000"
 
-        // 2. Bouw de Twitch authenticatie-URL
-        val twitchAuthUrl = "https://id.twitch.tv/oauth2/authorize" +
-                "?response_type=token" + // Vraagt een token direct in de URL fragment (#)
-                "&client_id=$clientId" +
-                "&redirect_uri=$redirectUri" +
-                "&scope=chat:read chat:edit user:read:follows user:edit:follows channel:read:polls user:read:broadcast moderation:read channel:read:vips moderator:read:chatters"
+    private val scopes = listOf(
+        "chat:read",
+        "chat:edit",
+        "user:read:follows",
+        "user:edit:follows",
+        "channel:read:polls",
+        "user:read:broadcast",
+        "moderation:read",
+        "channel:read:vips",
+        "moderator:read:chatters"
+    )
 
-        // 3. Open de URL in een Custom Tab (externe browser)
-        val builder = CustomTabsIntent.Builder()
-        val customTabsIntent = builder.build()
-        customTabsIntent.launchUrl(context, twitchAuthUrl.toUri())
-    }
-
-    fun stopLoginFlow() {
-        LoginServer.stop()
-    }
+    /** Authorization URL loaded by the in-app WebView. */
+    val authUrl: String
+        get() = "https://id.twitch.tv/oauth2/authorize" +
+            "?response_type=token" +
+            "&client_id=$clientId" +
+            "&redirect_uri=$redirectUri" +
+            "&scope=${scopes.joinToString("%20")}"
 }

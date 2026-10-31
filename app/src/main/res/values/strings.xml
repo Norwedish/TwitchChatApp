@@ -1,3 +1,112 @@
 <resources>
     <string name="app_name">TwitcherChat</string>
+
+    <!-- Login -->
+    <string name="login_tagline">Chat with your favorite Twitch streamers, right from your pocket.</string>
+    <string name="login_with_twitch">Log in with Twitch</string>
+    <string name="login_client_id_missing">Twitch Client ID is not configured. Add twitch.clientId to local.properties.</string>
+    <string name="login_failed">Login failed. Please try again.</string>
+    <string name="login_cancelled">Login was cancelled.</string>
+    <string name="login_signing_in">Signing you in…</string>
+    <string name="login_failed_reason">Login failed: %1$s</string>
+    <string name="login_failed_unauthorized">Twitch rejected this login. Please log in again.</string>
+    <string name="login_failed_network">Could not reach Twitch. Check your internet connection and try again.</string>
+    <string name="login_in_app_title">Log in with Twitch</string>
+    <string name="login_in_app_explanation">Sign in below with the Twitch account you want to use. Every login starts with a fresh session, so you can always pick a different account — even if another account is active in your browser.</string>
+
+    <!-- Main screen -->
+    <string name="settings">Settings</string>
+    <string name="log_out">Log out</string>
+    <string name="search_streamers">Search streamers</string>
+    <string name="live_now_count">%1$d live now</string>
+    <string name="no_live_streams">No followed channels are live</string>
+    <string name="follows_none_live">You follow %1$d channels, but none are live right now.</string>
+    <string name="follows_empty">You don\'t follow any channels yet. Follow a streamer on Twitch to see them here.</string>
+    <string name="pull_to_refresh_hint">Pull down to refresh, or tap below.</string>
+    <string name="refresh">Refresh</string>
+    <string name="error_loading">Something went wrong</string>
+    <string name="error_session_expired">Your Twitch session expired. Log out and log in again.</string>
+    <string name="error_rate_limited">Twitch is receiving too many requests. Please try again in a minute.</string>
+    <string name="error_twitch_unavailable">Twitch is having trouble right now. Please try again later.</string>
+    <string name="retry">Retry</string>
+    <string name="live">LIVE</string>
+    <string name="viewers_content_description">Viewer count</string>
+
+    <!-- Search -->
+    <string name="search_hint">Search for a streamer…</string>
+    <string name="clear_search">Clear search</string>
+    <string name="back">Back</string>
+    <string name="search_empty_title">Find a channel</string>
+    <string name="search_empty_subtitle">Type a streamer name to search Twitch.</string>
+    <string name="no_results">No results for “%1$s”</string>
+    <string name="no_title">No title</string>
+
+    <!-- Chat -->
+    <string name="send_a_message">Send a message</string>
+    <string name="send">Send</string>
+    <string name="emote_menu">Open emote menu</string>
+    <string name="emote_search_hint">Search emotes…</string>
+    <string name="select_an_emote">Select an emote</string>
+    <string name="no_emotes_loaded">No emotes loaded</string>
+    <string name="no_emotes_for_tab">No emotes for %1$s</string>
+    <string name="new_messages">%1$d new</string>
+    <string name="scroll_to_bottom">Scroll to bottom</string>
+    <string name="replying_to">Replying to %1$s</string>
+    <string name="clear_reply">Clear reply</string>
+    <string name="you_are_banned">You are banned from this chat</string>
+    <string name="connecting">Connecting to chat…</string>
+    <string name="waiting_for_messages">Connected — waiting for messages…</string>
+    <string name="connection_error">Connection error — reconnecting…</string>
+    <string name="disconnected">Disconnected</string>
+    <string name="connected">Connected</string>
+    <string name="poll_ended">Poll has ended</string>
+    <string name="votes_count">%1$d votes</string>
+    <string name="chatters">Chatters</string>
+    <string name="could_not_load_chatters">Could not load chatters or the chat is empty.</string>
+    <string name="close">Close</string>
+    <string name="reply">Reply</string>
+    <string name="profile">Profile</string>
+    <string name="timeout_10m">Time out (10 min)</string>
+    <string name="ban">Ban</string>
+    <string name="confirm_ban_title">Ban %1$s?</string>
+    <string name="confirm_timeout_title">Time out %1$s for 10 minutes?</string>
+    <string name="confirm_ban_text">This removes all of their messages and blocks them from chatting. You can undo this in the channel’s mod tools.</string>
+    <string name="confirm_timeout_text">They will be unable to chat for 10 minutes. You can undo this in the channel’s mod tools.</string>
+    <string name="cancel">Cancel</string>
+    <string name="cast_to_device">Cast to device</string>
+    <string name="cast_select_device">Select a device to cast the stream to.</string>
+    <string name="open_in_browser">Open in browser</string>
+    <string name="cd_reply">Reply</string>
+    <string name="cd_reply_to">Reply to</string>
+    <string name="cd_subscription">Subscription</string>
+    <string name="cd_raid">Raid</string>
+    <string name="cd_announcement">Announcement</string>
+    <string name="cd_system_message">System message</string>
+    <string name="viewers_count">%1$s viewers</string>
+    <string name="messages_in_chat">%1$d messages in this chat</string>
+
+    <!-- Chat settings -->
+    <string name="chat_settings">Chat settings</string>
+    <string name="settings_intro_title">What does this screen do?</string>
+    <string name="settings_intro_text">Twitch sends a system NOTICE message whenever the chat mode changes (slow mode, emote-only, …). The current mode is always shown in the banner above the chat input. Use the switches below to choose whether these notices should ALSO appear as messages in the chat. Switch ON = hide the notice in chat. Changes are saved automatically.</string>
+    <string name="group_slow_mode">Slow mode</string>
+    <string name="group_emote_only">Emote-only</string>
+    <string name="group_subs_only">Subscribers-only</string>
+    <string name="group_r9k">Unique chat (R9K)</string>
+    <string name="notice_turned_on">Turned on</string>
+    <string name="notice_turned_off">Turned off</string>
+    <string name="msg_id_caption">msg-id: %1$s</string>
+    <string name="custom_msg_ids">Custom hidden msg-ids</string>
+    <string name="custom_msg_ids_explanation">Hide any other NOTICE by its msg-id — for example messages from bots or extensions. Tap a chip to remove it again.</string>
+    <string name="no_custom_msg_ids">No custom msg-ids yet.</string>
+    <string name="add_custom_msg_id">msg-id to hide (e.g. msg_channel_suspended)</string>
+    <string name="add">Add</string>
+    <string name="reset_to_defaults">Reset to defaults</string>
+    <string name="remove">Remove</string>
+    <string name="enter_a_msg_id">Enter a msg-id first</string>
+    <string name="saved">Saved</string>
+    <string name="reset">Reset</string>
+    <string name="reset_confirm_title">Reset all switches?</string>
+    <string name="reset_confirm_text">All room-state notices will be hidden in chat again (the default), and custom msg-ids are removed.</string>
+    <string name="yes_reset">Reset</string>
 </resources>
