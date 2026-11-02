@@ -18,10 +18,10 @@ class AuthViewModel : ViewModel() {
     /**
      * Client ID used for the GQL endpoints (channel points, polls, playback token).
      *
-     * Twitch's public web client ID is used instead of the app's own client ID: GQL requires the
-     * same client that issued the OAuth token, and the web client is the one the Twitch website
-     * (and every third-party client) uses for these operations. Using the app's own client ID here
-     * makes Twitch reject the token with HTTP 401.
+     * Twitch's public web client ID is required here: GQL answers "The Client-ID header is invalid"
+     * (HTTP 400) for the app's own client ID, and a token issued by the app's client is rejected
+     * with HTTP 401 when sent with the web client ID. So GQL calls are made with the web client and
+     * no Authorization header — the same as the Twitch website does for anonymous viewers.
      */
     val gqlClientId: String = GQL_CLIENT_ID
 

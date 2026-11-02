@@ -243,6 +243,16 @@ class MainActivity : AppCompatActivity() {
                                     return@LaunchedEffect
                                 }
                                 mainViewModel.loadFollowedStreams()
+                                // Diagnostics: show which client issued the token and which scopes
+                                // it has, so channel points failures can be diagnosed from logcat.
+                                UserManager.accessToken?.let { token ->
+                                    val tokenClient = TwitchApi.validateOAuthToken(token)
+                                    Log.d(
+                                        "MainActivity",
+                                        "Token client_id=$tokenClient, app client_id=${UserManager.CLIENT_ID}, " +
+                                            "gql client_id=$GQL_CLIENT_ID, gql accepted=${TwitchApi.isGqlTokenValid(token)}"
+                                    )
+                                }
                             }
                             MainScreen(
                                 viewModel = mainViewModel,

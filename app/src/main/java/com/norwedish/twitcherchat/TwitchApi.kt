@@ -672,6 +672,34 @@ object TwitchApi {
         }
     }
 
+    /**
+     * Checks the token against Twitch's OAuth validation endpoint. Unlike the GQL check this works
+     * for any client ID and reports the scopes the token actually has, which makes it possible to
+     * tell "token rejected" apart from "token valid but missing scopes".
+     */
+    suspend fun validateOAuthToken(token: String): String? {
+        return try {
+            val response = client.get("https://id.twitch.tv/oauth2/validate") {
+                header("Authorization", "OAuth $token")
+            }
+            val body: String = response.bodyAsText()
+            if (!response.status.isSuccess()) {
+                Log.w("TwitchApi", "OAuth validate failed: HTTP ${response.status.value} ${body.take(200)}")
+                return null
+            }
+            val json = Json.parseToJsonElement(body).jsonObject
+            val clientId = json["client_id"]?.jsonPrimitive?.contentOrNull ?: "?"
+            val login = json["login"]?.jsonPrimitive?.contentOrNull ?: "?"
+            val scopes = json["scopes"]?.jsonArray?.joinToString(" ") { it.jsonPrimitive.contentOrNull ?: "" } ?: ""
+            Log.d("TwitchApi", "OAuth token valid for $login (client_id=$clientId, expires_in=${json["expires_in"]})")
+            Log.d("TwitchApi", "OAuth token scopes: $scopes")
+            clientId
+        } catch (e: Exception) {
+            Log.e("TwitchApi", "OAuth validate failed", e)
+            null
+        }
+    }
+
     suspend fun getUsers(userIds: List<String>, token: String, clientId: String): List<TwitchUser> {
         if (userIds.isEmpty()) return emptyList()
         return try {
