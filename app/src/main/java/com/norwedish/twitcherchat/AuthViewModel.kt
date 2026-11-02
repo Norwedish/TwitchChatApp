@@ -37,7 +37,12 @@ class AuthViewModel : ViewModel() {
         "user:read:broadcast",
         "moderation:read",
         "channel:read:vips",
-        "moderator:read:chatters"
+        "moderator:read:chatters",
+        // Channel points: read the balance/rewards and redeem them.
+        // Twitch asks for a 2FA code during login when these scopes are requested; that is
+        // expected and happens on every login for this account.
+        "channel:read:redemptions",
+        "channel:manage:redemptions"
     )
 
     /** Authorization URL loaded by the in-app WebView. */

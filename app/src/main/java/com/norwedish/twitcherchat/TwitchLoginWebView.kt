@@ -188,7 +188,13 @@ fun TwitchLoginWebView(
                 text = stringResource(R.string.login_in_app_explanation),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp)
+            )
+            Text(
+                text = stringResource(R.string.login_two_factor_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 10.dp)
             )
 
             Box(modifier = Modifier.fillMaxSize()) {
