@@ -40,6 +40,9 @@ Notes and assumptions
 - Search for channels and jump straight into their chat
 - In-app video player above the chat (Media3 ExoPlayer, HLS) — plays the signed usher stream
   directly over HTTPS; a toggle in the chat top bar shows/hides it
+- Channel tools (button left of the emote button in the input bar): channel points balance and
+  redeemable rewards (with input dialog for rewards that ask for a message), the active poll and
+  the pinned message
 - Chromecast support (local HLS proxy with an allowlisted, LAN-reachable proxy server)
 - Real-time "went live" updates via EventSub WebSocket + intelligent polling + background WorkManager
   with notifications

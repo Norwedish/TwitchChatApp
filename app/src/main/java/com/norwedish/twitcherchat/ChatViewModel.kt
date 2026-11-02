@@ -88,6 +88,15 @@ class ChatViewModel : ViewModel() {
     private val _poll = MutableStateFlow<Poll?>(null)
     val poll: StateFlow<Poll?> = _poll.asStateFlow()
 
+    private val _pinnedMessage = MutableStateFlow<PinnedMessage?>(null)
+    val pinnedMessage: StateFlow<PinnedMessage?> = _pinnedMessage.asStateFlow()
+
+    private val _channelPoints = MutableStateFlow(ChannelPointsState())
+    val channelPoints: StateFlow<ChannelPointsState> = _channelPoints.asStateFlow()
+
+    private val _isChannelToolsVisible = MutableStateFlow(false)
+    val isChannelToolsVisible: StateFlow<Boolean> = _isChannelToolsVisible.asStateFlow()
+
     // Chatter list bottom-sheet state
     private val _isChatterListVisible = MutableStateFlow(false)
     val isChatterListVisible: StateFlow<Boolean> = _isChatterListVisible.asStateFlow()
@@ -193,6 +202,8 @@ class ChatViewModel : ViewModel() {
 
         viewModelScope.launch { service.connectionState.collect { _connectionState.value = it } }
         viewModelScope.launch { service.poll.collect { _poll.value = it } }
+        viewModelScope.launch { service.pinnedMessage.collect { _pinnedMessage.value = it } }
+        viewModelScope.launch { service.channelPoints.collect { _channelPoints.value = it } }
         viewModelScope.launch { service.isCurrentUserModerator.collect { _isCurrentUserModerator.value = it } }
         viewModelScope.launch { service.roomState.collect { _roomState.value = it } }
         viewModelScope.launch {
@@ -337,6 +348,35 @@ class ChatViewModel : ViewModel() {
         try { chatServiceRef?.get()?.voteOnPoll(pollId, choiceId) } catch (_: Exception) {}
     }
 
+    // --- Channel tools: pinned message, channel points ---
+
+    fun onChannelToolsToggled() {
+        val opening = !_isChannelToolsVisible.value
+        _isChannelToolsVisible.value = opening
+        if (opening) refreshChannelPoints()
+    }
+
+    fun onChannelToolsDismissed() {
+        _isChannelToolsVisible.value = false
+    }
+
+    fun refreshChannelPoints() {
+        val channelId = currentChannelId
+        val login = currentChannel
+        if (channelId.isBlank() || login.isBlank()) return
+        try { chatServiceRef?.get()?.loadChannelPoints(login, channelId) } catch (_: Exception) {}
+    }
+
+    fun redeemReward(reward: ChannelReward, input: String? = null) {
+        val channelId = currentChannelId
+        if (channelId.isBlank()) return
+        try { chatServiceRef?.get()?.redeemReward(channelId, reward, input) } catch (_: Exception) {}
+    }
+
+    fun dismissPinnedMessage() {
+        _pinnedMessage.value = null
+    }
+
     private fun modAction(action: String, username: String) {
         val command = if (action == "ban") "/ban $username" else "/timeout $username 600"
         chatServiceRef?.get()?.sendMessage(currentChannel, command)
@@ -371,7 +411,11 @@ class ChatViewModel : ViewModel() {
         currentChannelId = channelId
         currentChannel = channelName
         stopPolling()
-        if (channelId.isNotBlank()) startPolling(channelId)
+        if (channelId.isNotBlank()) {
+            startPolling(channelId)
+            // Channel points balance/rewards are per channel
+            refreshChannelPoints()
+        }
     }
 
     private fun startPolling(userId: String) {

@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -121,24 +122,10 @@ data class PollChoice(
     @SerialName("votes") val votes: Int = 0
 )
 
-// Data classes for GQL Voting
-@Serializable
-data class GqlRequest(val operationName: String, val variables: GqlVariables, val extensions: GqlExtensions)
-
-@Serializable
-data class GqlVariables(val input: GqlInput)
-
-@Serializable
-data class GqlInput(val pollID: String, val choiceID: String)
-
-@Serializable
-data class GqlExtensions(@SerialName("persistedQuery") val persistedQuery: GqlPersistedQuery)
-
-@Serializable
-data class GqlPersistedQuery(val version: Int, val sha256Hash: String)
 
 
 class ChatService : Service() {
+
 
     private val binder = ChatBinder()
     private val serviceJob = SupervisorJob()
@@ -243,6 +230,14 @@ class ChatService : Service() {
     private val _poll = MutableStateFlow<Poll?>(null)
     val poll = _poll.asStateFlow()
 
+    // Pinned message (moderators/streamer can pin one message to the top of chat)
+    private val _pinnedMessage = MutableStateFlow<PinnedMessage?>(null)
+    val pinnedMessage = _pinnedMessage.asStateFlow()
+
+    // Channel points: balance, rewards and the last redemption receipt
+    private val _channelPoints = MutableStateFlow(ChannelPointsState())
+    val channelPoints = _channelPoints.asStateFlow()
+
     private val _roomState = MutableStateFlow<RoomState?>(null)
     val roomState = _roomState.asStateFlow()
 
@@ -250,6 +245,10 @@ class ChatService : Service() {
     val chatters = _chatters.asStateFlow()
 
     private val currentChatters = Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** Login of the channel this service is connected to (used for channel points lookups). */
+    @Volatile
+    private var currentChannelName: String = ""
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -276,6 +275,7 @@ class ChatService : Service() {
 
         val channelName = intent?.getStringExtra("channelName") ?: return START_NOT_STICKY
         val twitchUserId = intent.getStringExtra("twitchUserId")
+        currentChannelName = channelName
 
         createNotificationChannel()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -433,6 +433,8 @@ class ChatService : Service() {
         hasJoinedChannel = false
         connectionJob?.cancel()
         _poll.value = null
+        _pinnedMessage.value = null
+        _channelPoints.value = ChannelPointsState()
         _roomState.value = null
         _connectionState.value = ConnectionState.DISCONNECTED
     }
@@ -555,19 +557,31 @@ class ChatService : Service() {
                             }
                         }
                         "USERNOTICE" -> {
-                            if (rawMessage.contains("msg-id=channel.poll.")) {
-                                handlePollNotice(rawMessage)
-                            } else {
-                                try {
-                                    parseMessage(rawMessage)?.let {
-                                        if (it.message.isNotBlank()) _chatMessages.emit(it)
+                            when {
+                                rawMessage.contains("msg-id=channel.poll.") -> handlePollNotice(rawMessage)
+                                rawMessage.contains("msg-id=announcement") &&
+                                    rawMessage.contains("msg-param-pin-type") -> handlePinNotice(rawMessage)
+                                else -> {
+                                    try {
+                                        parseMessage(rawMessage)?.let {
+                                            if (it.message.isNotBlank()) _chatMessages.emit(it)
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Failed to parse USERNOTICE", e)
                                     }
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Failed to parse USERNOTICE", e)
                                 }
                             }
                         }
-                        "CLEARMSG" -> handleClearMessage(rawMessage)
+                        "CLEARMSG" -> {
+                            handleClearMessage(rawMessage)
+                            // Unpinning also arrives as CLEARMSG with the pinned message's id
+                            val tags = ircTags(rawMessage)
+                            if (tags["target-msg-id"] != null &&
+                                tags["target-msg-id"] == _pinnedMessage.value?.messageId
+                            ) {
+                                _pinnedMessage.value = null
+                            }
+                        }
                         "CLEARCHAT" -> handleClearChat(rawMessage)
                         "NOTICE" -> handleNotice(rawMessage)
                         else -> {
@@ -685,6 +699,43 @@ class ChatService : Service() {
         }
     }
 
+    /** Parses IRC tags ("@a=b;c=d ...") into a map. Returns an empty map when there are none. */
+    private fun ircTags(rawMessage: String): Map<String, String> {
+        if (!rawMessage.startsWith("@")) return emptyMap()
+        return rawMessage.substringAfter('@').substringBefore(" :").split(';').associate {
+            val parts = it.split('=', limit = 2)
+            if (parts.size == 2) parts[0] to parts[1] else parts[0] to ""
+        }
+    }
+
+    /**
+     * Handles a pinned message. Twitch sends a USERNOTICE with msg-id=announcement and
+     * msg-param-pin-type=pin (or unpin) when a moderator pins/unpins a message.
+     */
+    private fun handlePinNotice(rawMessage: String) {
+        val tags = ircTags(rawMessage)
+        val pinType = tags["msg-param-pin-type"]
+        if (pinType == "unpin") {
+            _pinnedMessage.value = null
+            return
+        }
+        val messageId = tags["msg-param-message-id"] ?: tags["id"]
+        val body = tags["system-msg"]?.takeIf { it.isNotBlank() }
+            ?: rawMessage.substringAfter(" :", "")
+        val author = tags["msg-param-sender-name"]
+            ?: tags["display-name"]
+            ?: tags["login"]
+            ?: ""
+        if (messageId.isNullOrBlank() || body.isBlank()) return
+        _pinnedMessage.value = PinnedMessage(
+            messageId = messageId,
+            author = author,
+            message = body,
+            pinnedBy = tags["login"]
+        )
+        Log.d(TAG, "Pinned message: $author: ${body.take(60)}")
+    }
+
     private fun handlePollNotice(rawMessage: String) {
         val tagsPart = rawMessage.substringAfter('@').substringBefore(" :")
         val tags = tagsPart.split(';').associate {
@@ -757,25 +808,47 @@ class ChatService : Service() {
 
     fun voteOnPoll(pollId: String, choiceId: String) {
         serviceScope.launch {
-            val token = UserManager.accessToken ?: return@launch
-            try {
-                val request = GqlRequest(
-                    operationName = "PollVote",
-                    variables = GqlVariables(input = GqlInput(pollID = pollId, choiceID = choiceId)),
-                    extensions = GqlExtensions(
-                        persistedQuery = GqlPersistedQuery(
-                            version = 1,
-                            sha256Hash = "968dba31919a2d89369931b753472097951c3a64b9795029ba26a9096734e064"
-                        )
+            val ok = try {
+                ChannelToolsApi.voteOnPoll(client, pollId, choiceId)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to vote on poll", e)
+                false
+            }
+            if (!ok) {
+                _chatMessages.emit(
+                    ChatMessage(
+                        author = null,
+                        authorLogin = null,
+                        message = "Could not register your vote. Try again.",
+                        authorColor = null,
+                        type = MessageType.SYSTEM,
+                        tags = mapOf("client" to "poll_vote_error")
                     )
                 )
+            }
+        }
+    }
 
-                client.post("https://gql.twitch.tv/gql") {
-                    header("Authorization", "OAuth $token")
-                    contentType(ContentType.Application.Json)
-                    setBody(json.encodeToString(request))
-                }
-            } catch (e: Exception) {
+    /** Loads the channel points balance and rewards for [channelLogin] / [channelId]. */
+    fun loadChannelPoints(channelLogin: String, channelId: String) {
+        serviceScope.launch {
+            _channelPoints.update { it.copy(isLoading = true, error = null) }
+            val state = ChannelToolsApi.loadChannelPoints(client, channelLogin, channelId)
+            _channelPoints.value = state.copy(
+                isLoading = false,
+                lastRedemption = _channelPoints.value.lastRedemption
+            )
+        }
+    }
+
+    /** Redeems a channel points reward and stores the receipt in [channelPoints]. */
+    fun redeemReward(channelId: String, reward: ChannelReward, input: String? = null) {
+        serviceScope.launch {
+            val receipt = ChannelToolsApi.redeemReward(client, channelId, reward, input)
+            _channelPoints.update { it.copy(lastRedemption = receipt) }
+            if (receipt.success) {
+                // Refresh the balance so the menu shows the new amount
+                loadChannelPoints(currentChannelName, channelId)
             }
         }
     }

@@ -296,6 +296,9 @@ fun ChatScreen(
     val selectedUserForProfile by viewModel.selectedUserForProfile.collectAsState()
     val viewerCount by viewModel.viewerCount.collectAsState()
     val poll by viewModel.poll.collectAsState()
+    val pinnedMessage by viewModel.pinnedMessage.collectAsState()
+    val channelPoints by viewModel.channelPoints.collectAsState()
+    val isChannelToolsVisible by viewModel.isChannelToolsVisible.collectAsState()
     val isChatterListVisible by viewModel.isChatterListVisible.collectAsState()
     val chatters by viewModel.chatters.collectAsState()
     val isChattersLoading by viewModel.isChattersLoading.collectAsState()
@@ -640,6 +643,23 @@ fun ChatScreen(
             AnimatedVisibility(visible = connectionState != ConnectionState.CONNECTED) {
                 ConnectionStateBanner(state = connectionState)
             }
+            // Pinned message from the streamer/moderators
+            AnimatedVisibility(visible = pinnedMessage != null) {
+                pinnedMessage?.let { pinned ->
+                    PinnedMessageBanner(
+                        pinned = pinned,
+                        onOpen = {
+                            val index = messages.reversed().indexOfFirst { it.id == pinned.messageId }
+                            if (index >= 0) {
+                                coroutineScope.launch {
+                                    try { listState.animateScrollToItem(index) } catch (_: Exception) {}
+                                }
+                            }
+                        },
+                        onDismiss = { viewModel.dismissPinnedMessage() }
+                    )
+                }
+            }
             poll?.let {
                 PollCard(poll = it, onVote = { pollId, choiceId ->
                     viewModel.voteOnPoll(pollId, choiceId)
@@ -897,10 +917,26 @@ fun ChatScreen(
                                 keyboardController?.hide()
                                 viewModel.onEmoteMenuToggled()
                             },
+                            onChannelToolsClick = {
+                                keyboardController?.hide()
+                                viewModel.onChannelToolsToggled()
+                            },
+                            hasActivePoll = poll != null,
                             enabled = !isBanned
                         )
                     }
                 }
+            }
+
+            if (isChannelToolsVisible) {
+                ChannelToolsSheet(
+                    state = channelPoints,
+                    poll = poll,
+                    onRefresh = { viewModel.refreshChannelPoints() },
+                    onRedeem = { reward, input -> viewModel.redeemReward(reward, input) },
+                    onVote = { pollId, choiceId -> viewModel.voteOnPoll(pollId, choiceId) },
+                    onDismiss = { viewModel.onChannelToolsDismissed() }
+                )
             }
 
             if (isEmoteMenuVisible) {
@@ -1699,93 +1735,13 @@ fun UserInfoDialog(
 }
 
 @Composable
-fun PollCard(poll: Poll, onVote: (String, String) -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(8.dp),
-        shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Poll,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = poll.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = stringResource(R.string.votes_count, poll.totalVotes),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
-            poll.choices.forEach {
-                PollChoiceItem(choice = it, totalVotes = poll.totalVotes, onVote = {
-                    onVote(poll.id, it.id)
-                })
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
-            if (poll.status == "COMPLETED") {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    stringResource(R.string.poll_ended),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun PollChoiceItem(choice: PollChoice, totalVotes: Int, onVote: () -> Unit) {
-    val percentage = if (totalVotes > 0) choice.votes.toFloat() / totalVotes else 0f
-    val animatedPercentage by animateFloatAsState(targetValue = percentage, label = "pollProgress")
-
-    Column(modifier = Modifier.clickable(onClick = onVote)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = choice.title,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(text = "${(animatedPercentage * 100).toInt()}%", fontWeight = FontWeight.Bold)
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        LinearProgressIndicator(
-            progress = { animatedPercentage },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(8.dp)
-                .clip(RoundedCornerShape(4.dp)),
-            color = MaterialTheme.colorScheme.primary,
-            trackColor = MaterialTheme.colorScheme.surface
-        )
-    }
-}
-
-@Composable
 fun ChatInputBar(
     text: TextFieldValue,
     onTextChanged: (TextFieldValue) -> Unit,
     onSendClick: () -> Unit,
     onEmoteClick: () -> Unit,
+    onChannelToolsClick: () -> Unit,
+    hasActivePoll: Boolean = false,
     enabled: Boolean = true
 ) {
     Surface(
@@ -1800,6 +1756,18 @@ fun ChatInputBar(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(start = 4.dp, end = 8.dp)
         ) {
+            // Channel tools (channel points, active poll, pinned message) on the far left
+            IconButton(
+                onClick = onChannelToolsClick,
+                modifier = Modifier.size(48.dp)
+            ) {
+                Icon(
+                    Icons.Filled.Redeem,
+                    contentDescription = stringResource(R.string.channel_tools),
+                    tint = if (hasActivePoll) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             IconButton(
                 onClick = onEmoteClick,
                 enabled = enabled,
