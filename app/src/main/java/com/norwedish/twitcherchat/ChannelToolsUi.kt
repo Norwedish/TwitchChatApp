@@ -287,10 +287,10 @@ fun ChannelToolsSheet(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (state.error == "disabled") {
-                            stringResource(R.string.channel_points_disabled)
-                        } else {
-                            stringResource(R.string.channel_points_unavailable)
+                        text = when (state.error) {
+                            "disabled" -> stringResource(R.string.channel_points_disabled)
+                            "unauthorized" -> stringResource(R.string.channel_points_unauthorized)
+                            else -> stringResource(R.string.channel_points_unavailable)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

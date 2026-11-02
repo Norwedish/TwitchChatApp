@@ -71,6 +71,13 @@ data class ChannelPointsState(
     val lastRedemption: RewardRedemption? = null
 )
 
+/** Result of a GQL call: data, a rejected token, or any other failure. */
+private sealed interface GqlResult {
+    data class Ok(val data: JsonElement) : GqlResult
+    data object Unauthorized : GqlResult
+    data object Failed : GqlResult
+}
+
 /**
  * GQL helpers for polls and channel points. All calls fail soft (return null / a state with an
  * error) so the chat keeps working when Twitch changes something.
@@ -132,12 +139,18 @@ object ChannelToolsApi {
             put("channelID", channelId)
             put("channelLogin", channelLogin)
         }
-        val data = gqlPersisted(
+        val result = gqlPersisted(
             client,
             operationName = "ChannelPointsContext",
             variables = variables,
             hash = "1530a003a7d374b0380b79db0be0534f30ff46e61cffa2bc0e2468a909fbc024"
-        ) ?: return ChannelPointsState(error = "unavailable")
+        )
+        when (result) {
+            is GqlResult.Ok -> Unit
+            is GqlResult.Unauthorized -> return ChannelPointsState(error = "unauthorized")
+            is GqlResult.Failed -> return ChannelPointsState(error = "unavailable")
+        }
+        val data = (result as GqlResult.Ok).data
 
         val channel = data.jsonObject["community"]?.jsonObject?.get("channel")?.jsonObject
         val self = channel?.get("self")?.jsonObject
@@ -232,8 +245,8 @@ object ChannelToolsApi {
         operationName: String,
         variables: JsonObject,
         hash: String
-    ): JsonElement? {
-        val auth = token() ?: return null
+    ): GqlResult {
+        val auth = token() ?: return GqlResult.Failed
         val body = buildJsonObject {
             put("operationName", operationName)
             put("variables", variables)
@@ -251,17 +264,22 @@ object ChannelToolsApi {
                 contentType(ContentType.Application.Json)
                 setBody(body)
             }
+            if (response.status.value == 401 || response.status.value == 403) {
+                logFailure(operationName, response.status.value)
+                return GqlResult.Unauthorized
+            }
             if (!response.status.isSuccess()) {
                 logFailure(operationName, response.status.value)
-                return null
+                return GqlResult.Failed
             }
             val text = response.bodyAsText()
-            val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
+            val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
+                ?: return GqlResult.Failed
             root["errors"]?.let { Log.w(TAG, "$operationName returned errors: ${it.toString().take(200)}") }
-            root["data"]
+            root["data"]?.let { GqlResult.Ok(it) } ?: GqlResult.Failed
         } catch (e: Exception) {
             Log.e(TAG, "$operationName request failed", e)
-            null
+            GqlResult.Failed
         }
     }
 

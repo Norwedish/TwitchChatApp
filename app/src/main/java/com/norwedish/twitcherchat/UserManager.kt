@@ -131,19 +131,29 @@ object UserManager {
     }
 
     suspend fun logout() {
-        accessToken?.let {
-            withContext(Dispatchers.IO) {
-                TwitchApi.revokeToken(it, CLIENT_ID)
-            }
-        }
+        val tokenToRevoke = accessToken
+        // Clear the session first: a failing revoke call must never leave the user "logged in".
         withContext(Dispatchers.Main) {
             accessToken = null
             currentUser = null
         }
         securePrefs?.edit()?.clear()?.apply()
+        if (tokenToRevoke != null) {
+            runCatching { TwitchApi.revokeToken(tokenToRevoke, CLIENT_ID) }
+        }
         // Notify listeners that user logged out
         try {
             appContext?.sendBroadcast(Intent(ACTION_USER_LOGGED_OUT))
         } catch (_: Exception) {}
+    }
+
+    /**
+     * Checks the stored OAuth token against Twitch. Returns false when Twitch rejects it (expired
+     * or revoked), which is the most common reason features like channel points fail with HTTP 401
+     * while the app still looks logged in.
+     */
+    suspend fun isTokenValid(): Boolean {
+        val token = accessToken ?: return false
+        return runCatching { TwitchApi.getCurrentUser(token, CLIENT_ID) != null }.getOrDefault(false)
     }
 }

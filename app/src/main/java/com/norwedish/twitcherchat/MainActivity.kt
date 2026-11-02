@@ -227,6 +227,19 @@ class MainActivity : AppCompatActivity() {
 
                         composable(AppRoutes.MAIN) {
                             LaunchedEffect(Unit) {
+                                // A token that Twitch no longer accepts (expired/revoked) makes every
+                                // authenticated call fail with 401 while the app still looks logged
+                                // in. Send the user to the login screen instead of showing an app
+                                // that silently can't do anything.
+                                if (UserManager.accessToken != null && !UserManager.isTokenValid()) {
+                                    Log.w("MainActivity", "Stored Twitch token is no longer valid; logging out")
+                                    UserManager.logout()
+                                    cancelLiveStreamWorker()
+                                    navController.navigate(AppRoutes.LOGIN) {
+                                        popUpTo(AppRoutes.MAIN) { inclusive = true }
+                                    }
+                                    return@LaunchedEffect
+                                }
                                 mainViewModel.loadFollowedStreams()
                             }
                             MainScreen(
