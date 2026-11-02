@@ -8,23 +8,28 @@ package com.norwedish.twitcherchat
  * before any network request is made, so no local HTTP server and no cleartext traffic are
  * needed.
  *
- * Login uses the official Twitch mobile client ID ([GQL_MOBILE_CLIENT_ID]) so that the token also
- * works for channel points and poll voting, which only accept the mobile/web clients. The mobile
- * client has no localhost redirect registered, so the WebView also watches for the token in any
- * navigation.
+ * Two client IDs are involved:
+ *  - [authorizeClientId]: the app's own Twitch application. It is the only client for which our
+ *    `http://localhost:3000` redirect is registered, so the login page is opened for it.
+ *  - [gqlClientId]: the official Twitch mobile client, used for the GQL endpoints (channel points,
+ *    poll voting, playback token). Twitch rejects tokens from other clients there, so a token
+ *    issued by the app client is not accepted by it (HTTP 401) — a Twitch-side restriction.
  */
 
 import androidx.lifecycle.ViewModel
 
 class AuthViewModel : ViewModel() {
 
-    /** Client ID used for the OAuth login and for every GQL call. */
-    private val clientId: String = GQL_MOBILE_CLIENT_ID
+    /**
+     * Client ID used only to *authorize* (issue the token). The mobile client does not allow our
+     * redirect URI, so the login uses the app's own client (localhost redirect works).
+     */
+    private val authorizeClientId: String = BuildConfig.TWITCH_CLIENT_ID
 
     /** Client ID used for the GQL endpoints (channel points, polls, playback token). */
     val gqlClientId: String = GQL_MOBILE_CLIENT_ID
 
-    /** Redirect URI. Must be registered for the client in the Twitch Developer Console. */
+    /** Redirect URI registered for the app's Twitch application. */
     val redirectUri: String = "http://localhost:3000"
 
     private val scopes = listOf(
@@ -48,7 +53,7 @@ class AuthViewModel : ViewModel() {
     val authUrl: String
         get() = "https://id.twitch.tv/oauth2/authorize" +
             "?response_type=token" +
-            "&client_id=$clientId" +
+            "&client_id=$authorizeClientId" +
             "&redirect_uri=$redirectUri" +
             "&scope=${scopes.joinToString("%20")}"
 }
