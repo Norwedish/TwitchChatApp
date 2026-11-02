@@ -14,6 +14,7 @@
     <string name="login_in_app_title">Log in with Twitch</string>
     <string name="login_in_app_explanation">Sign in below with the Twitch account you want to use. Every login starts with a fresh session, so you can always pick a different account — even if another account is active in your browser.</string>
     <string name="login_two_factor_hint">Twitch may ask for a verification code. That is normal and happens on every login.</string>
+    <string name="login_redirect_mismatch">Twitch refused this login: the redirect address is not allowed for this Twitch app. Check the OAuth Redirect URL in the Twitch Developer Console.</string>
 
     <!-- Main screen -->
     <string name="settings">Settings</string>

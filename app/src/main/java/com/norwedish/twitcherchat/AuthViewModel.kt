@@ -7,25 +7,24 @@ package com.norwedish.twitcherchat
  * [redirectUri] with the token in the URL fragment; the WebView intercepts that navigation
  * before any network request is made, so no local HTTP server and no cleartext traffic are
  * needed.
+ *
+ * Login uses the official Twitch mobile client ID ([GQL_MOBILE_CLIENT_ID]) so that the token also
+ * works for channel points and poll voting, which only accept the mobile/web clients. The mobile
+ * client has no localhost redirect registered, so the WebView also watches for the token in any
+ * navigation.
  */
 
 import androidx.lifecycle.ViewModel
 
 class AuthViewModel : ViewModel() {
 
-    private val clientId: String = BuildConfig.TWITCH_CLIENT_ID
+    /** Client ID used for the OAuth login and for every GQL call. */
+    private val clientId: String = GQL_MOBILE_CLIENT_ID
 
-    /**
-     * Client ID used for the GQL endpoints (channel points, polls, playback token).
-     *
-     * Twitch's public web client ID is required here: GQL answers "The Client-ID header is invalid"
-     * (HTTP 400) for the app's own client ID, and a token issued by the app's client is rejected
-     * with HTTP 401 when sent with the web client ID. So GQL calls are made with the web client and
-     * no Authorization header — the same as the Twitch website does for anonymous viewers.
-     */
-    val gqlClientId: String = GQL_CLIENT_ID
+    /** Client ID used for the GQL endpoints (channel points, polls, playback token). */
+    val gqlClientId: String = GQL_MOBILE_CLIENT_ID
 
-    /** Redirect URI registered for the Twitch application. Intercepted by the WebView. */
+    /** Redirect URI. Must be registered for the client in the Twitch Developer Console. */
     val redirectUri: String = "http://localhost:3000"
 
     private val scopes = listOf(

@@ -74,16 +74,21 @@ fun TwitchLoginWebView(
     val currentOnLoginError by rememberUpdatedState(onLoginError)
 
     /**
-     * Returns true when [url] is the OAuth redirect. The token lives in the fragment, so the
-     * redirect is parsed and cancelled before the WebView tries to load localhost.
+     * Returns true when [url] carries an OAuth result. With the official mobile client there is no
+     * localhost redirect registered, so the token/error can appear in the fragment of any
+     * navigation; the redirect URI is still accepted as a special case.
      */
     fun consumeRedirect(url: String?): Boolean {
-        if (url == null || !url.startsWith(redirectUri, ignoreCase = true)) return false
+        if (url == null) return false
+        val isRedirectUri = url.startsWith(redirectUri, ignoreCase = true)
+        val hasToken = url.contains("access_token=")
+        val hasError = url.contains("error=access_token")
+        if (!isRedirectUri && !hasToken && !hasError) return false
         if (!redirectHandled.compareAndSet(false, true)) return true
 
         val uri = Uri.parse(url)
-        val rawParams = (uri.fragment ?: uri.query).orEmpty()
-        val params = rawParams
+        // Fragment is "access_token=...&scope=..."; query may live before the '#'
+        val params = (uri.fragment.orEmpty().ifBlank { uri.query.orEmpty() })
             .split("&")
             .mapNotNull { part ->
                 val separator = part.indexOf('=')
@@ -142,6 +147,14 @@ fun TwitchLoginWebView(
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     isLoading = false
+                    // The mobile client redirects to tv.twitch.tv (which does not resolve) with
+                    // error=redirect_mismatch. Show that as a login error instead of a dead page.
+                    if (!redirectHandled.get() && url?.contains("error=redirect_mismatch") == true) {
+                        redirectHandled.set(true)
+                        currentOnLoginError(
+                            context.getString(R.string.login_redirect_mismatch)
+                        )
+                    }
                 }
             }
         }
