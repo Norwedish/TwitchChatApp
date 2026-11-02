@@ -32,15 +32,18 @@ import kotlinx.serialization.json.putJsonObject
 
 private const val TAG = "ChannelTools"
 
-/** The public client-id of the Twitch web app (same one the web player uses). */
-internal const val GQL_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
-
 /**
  * Client ID of the official Twitch mobile app. Twitch's GQL accepts this one for the
  * channel-points queries, which the web client ID does not (that returns 400 "Client-ID header is
  * invalid"). It is a public identifier, not a secret.
+ *
+ * Note: GQL only accepts a token issued by the same client, so this ID alone is not enough —
+ * see [AuthViewModel].
  */
 internal const val GQL_MOBILE_CLIENT_ID = "ue6666qo983tsx6so1t0vnawi233wa"
+
+/** The public client-id of the Twitch web app (same one the web player uses). */
+internal const val GQL_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 
 /** A message that the streamer or a moderator pinned to the top of chat. */
 data class PinnedMessage(
