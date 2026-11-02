@@ -156,4 +156,13 @@ object UserManager {
         val token = accessToken ?: return false
         return runCatching { TwitchApi.getCurrentUser(token, CLIENT_ID) != null }.getOrDefault(false)
     }
+
+    /**
+     * True when Twitch accepts the stored token on the GQL API. Helix and GQL can disagree, so this
+     * is checked separately before using channel points / polls / playback.
+     */
+    suspend fun isGqlTokenValid(): Boolean {
+        val token = accessToken ?: return false
+        return TwitchApi.isGqlTokenValid(token)
+    }
 }

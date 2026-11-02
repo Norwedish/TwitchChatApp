@@ -15,6 +15,16 @@ class AuthViewModel : ViewModel() {
 
     private val clientId: String = BuildConfig.TWITCH_CLIENT_ID
 
+    /**
+     * Client ID used for the GQL endpoints (channel points, polls, playback token).
+     *
+     * Twitch's public web client ID is used instead of the app's own client ID: GQL requires the
+     * same client that issued the OAuth token, and the web client is the one the Twitch website
+     * (and every third-party client) uses for these operations. Using the app's own client ID here
+     * makes Twitch reject the token with HTTP 401.
+     */
+    val gqlClientId: String = GQL_CLIENT_ID
+
     /** Redirect URI registered for the Twitch application. Intercepted by the WebView. */
     val redirectUri: String = "http://localhost:3000"
 
@@ -27,7 +37,10 @@ class AuthViewModel : ViewModel() {
         "user:read:broadcast",
         "moderation:read",
         "channel:read:vips",
-        "moderator:read:chatters"
+        "moderator:read:chatters",
+        // Channel points: read the balance/rewards and redeem them
+        "channel:read:redemptions",
+        "channel:manage:redemptions"
     )
 
     /** Authorization URL loaded by the in-app WebView. */

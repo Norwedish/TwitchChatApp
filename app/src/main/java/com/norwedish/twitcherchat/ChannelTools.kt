@@ -96,7 +96,7 @@ object ChannelToolsApi {
     private fun logFailure(operation: String, status: Int?) {
         when {
             token() == null -> Log.w(TAG, "$operation skipped: not logged in (no OAuth token)")
-            status != null -> Log.w(TAG, "$operation failed: HTTP $status")
+            status != null -> Log.w(TAG, "$operation failed: HTTP $status (client_id=$GQL_CLIENT_ID)")
             else -> Log.w(TAG, "$operation failed: network error")
         }
     }

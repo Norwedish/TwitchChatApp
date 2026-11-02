@@ -645,6 +645,33 @@ object TwitchApi {
         return response.data?.firstOrNull()
     }
 
+    /**
+     * Checks whether Twitch still accepts [token] on the GQL API (the API used for channel points,
+     * polls and the playback token). Helix can accept a token that GQL rejects, so this is the
+     * check that matters for those features.
+     */
+    suspend fun isGqlTokenValid(token: String): Boolean {
+        return try {
+            val response = client.post("https://gql.twitch.tv/gql") {
+                header("Client-ID", GQL_CLIENT_ID)
+                header("Authorization", "OAuth $token")
+                contentType(ContentType.Application.Json)
+                setBody("""{"query":"query { currentUser { id login } }"}""")
+            }
+            if (!response.status.isSuccess()) {
+                Log.w("TwitchApi", "GQL token check failed: HTTP ${response.status.value}")
+                return false
+            }
+            val body: String = response.bodyAsText()
+            val user = Json.parseToJsonElement(body)
+                .jsonObject["data"]?.jsonObject?.get("currentUser")
+            user != null && user !is kotlinx.serialization.json.JsonNull
+        } catch (e: Exception) {
+            Log.e("TwitchApi", "GQL token check failed", e)
+            false
+        }
+    }
+
     suspend fun getUsers(userIds: List<String>, token: String, clientId: String): List<TwitchUser> {
         if (userIds.isEmpty()) return emptyList()
         return try {

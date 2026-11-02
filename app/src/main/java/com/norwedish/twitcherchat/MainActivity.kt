@@ -240,6 +240,17 @@ class MainActivity : AppCompatActivity() {
                                     }
                                     return@LaunchedEffect
                                 }
+                                if (UserManager.accessToken != null && !UserManager.isGqlTokenValid()) {
+                                    // Helix still accepts it, but GQL (channel points, polls, playback)
+                                    // does not. Only a fresh login fixes that.
+                                    Log.w("MainActivity", "Stored Twitch token is rejected by GQL; logging out")
+                                    UserManager.logout()
+                                    cancelLiveStreamWorker()
+                                    navController.navigate(AppRoutes.LOGIN) {
+                                        popUpTo(AppRoutes.MAIN) { inclusive = true }
+                                    }
+                                    return@LaunchedEffect
+                                }
                                 mainViewModel.loadFollowedStreams()
                             }
                             MainScreen(
