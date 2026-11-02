@@ -226,24 +226,15 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         composable(AppRoutes.MAIN) {
-                            LaunchedEffect(Unit) {
+                            // Run once per login session (not on every navigation back to home),
+                            // otherwise a screen re-entry could log the user out again.
+                            LaunchedEffect(UserManager.accessToken) {
                                 // A token that Twitch no longer accepts (expired/revoked) makes every
                                 // authenticated call fail with 401 while the app still looks logged
                                 // in. Send the user to the login screen instead of showing an app
                                 // that silently can't do anything.
                                 if (UserManager.accessToken != null && !UserManager.isTokenValid()) {
                                     Log.w("MainActivity", "Stored Twitch token is no longer valid; logging out")
-                                    UserManager.logout()
-                                    cancelLiveStreamWorker()
-                                    navController.navigate(AppRoutes.LOGIN) {
-                                        popUpTo(AppRoutes.MAIN) { inclusive = true }
-                                    }
-                                    return@LaunchedEffect
-                                }
-                                if (UserManager.accessToken != null && !UserManager.isGqlTokenValid()) {
-                                    // Helix still accepts it, but GQL (channel points, polls, playback)
-                                    // does not. Only a fresh login fixes that.
-                                    Log.w("MainActivity", "Stored Twitch token is rejected by GQL; logging out")
                                     UserManager.logout()
                                     cancelLiveStreamWorker()
                                     navController.navigate(AppRoutes.LOGIN) {

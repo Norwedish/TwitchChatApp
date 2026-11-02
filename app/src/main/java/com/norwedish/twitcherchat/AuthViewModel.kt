@@ -37,10 +37,7 @@ class AuthViewModel : ViewModel() {
         "user:read:broadcast",
         "moderation:read",
         "channel:read:vips",
-        "moderator:read:chatters",
-        // Channel points: read the balance/rewards and redeem them
-        "channel:read:redemptions",
-        "channel:manage:redemptions"
+        "moderator:read:chatters"
     )
 
     /** Authorization URL loaded by the in-app WebView. */
