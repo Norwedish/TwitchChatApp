@@ -35,6 +35,13 @@ private const val TAG = "ChannelTools"
 /** The public client-id of the Twitch web app (same one the web player uses). */
 internal const val GQL_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 
+/**
+ * Client ID of the official Twitch mobile app. Twitch's GQL accepts this one for the
+ * channel-points queries, which the web client ID does not (that returns 400 "Client-ID header is
+ * invalid"). It is a public identifier, not a secret.
+ */
+internal const val GQL_MOBILE_CLIENT_ID = "ue6666qo983tsx6so1t0vnawi233wa"
+
 /** A message that the streamer or a moderator pinned to the top of chat. */
 data class PinnedMessage(
     val messageId: String,
@@ -96,7 +103,7 @@ object ChannelToolsApi {
     private fun logFailure(operation: String, status: Int?) {
         when {
             token() == null -> Log.w(TAG, "$operation skipped: not logged in (no OAuth token)")
-            status != null -> Log.w(TAG, "$operation failed: HTTP $status (client_id=$GQL_CLIENT_ID)")
+            status != null -> Log.w(TAG, "$operation failed: HTTP $status (client_id=$GQL_MOBILE_CLIENT_ID)")
             else -> Log.w(TAG, "$operation failed: network error")
         }
     }
@@ -257,9 +264,21 @@ object ChannelToolsApi {
                 }
             }
         }.toString()
+        // Channel points live behind the mobile client ID; the web client ID answers 400 there.
+        return postGql(client, operationName, body, GQL_MOBILE_CLIENT_ID, auth)
+    }
+
+    /** POSTs a GQL body and classifies the result (data / rejected token / other failure). */
+    private suspend fun postGql(
+        client: HttpClient,
+        operationName: String,
+        body: String,
+        clientId: String,
+        auth: String
+    ): GqlResult {
         return try {
             val response: HttpResponse = client.post("https://gql.twitch.tv/gql") {
-                header("Client-ID", GQL_CLIENT_ID)
+                header("Client-ID", clientId)
                 header("Authorization", "OAuth $auth")
                 contentType(ContentType.Application.Json)
                 setBody(body)
@@ -294,24 +313,9 @@ object ChannelToolsApi {
             put("query", query)
             put("variables", variables)
         }.toString()
-        return try {
-            val response: HttpResponse = client.post("https://gql.twitch.tv/gql") {
-                header("Client-ID", GQL_CLIENT_ID)
-                header("Authorization", "OAuth $auth")
-                contentType(ContentType.Application.Json)
-                setBody(body)
-            }
-            if (!response.status.isSuccess()) {
-                logFailure("GQL query", response.status.value)
-                return null
-            }
-            val text = response.bodyAsText()
-            val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
-            root["errors"]?.let { Log.w(TAG, "GQL returned errors: ${it.toString().take(200)}") }
-            root["data"]
-        } catch (e: Exception) {
-            Log.e(TAG, "GQL request failed", e)
-            null
+        return when (val result = postGql(client, "GQL query", body, GQL_CLIENT_ID, auth)) {
+            is GqlResult.Ok -> result.data
+            else -> null
         }
     }
 }
