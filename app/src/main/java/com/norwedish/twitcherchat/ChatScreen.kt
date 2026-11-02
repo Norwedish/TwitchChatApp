@@ -297,8 +297,6 @@ fun ChatScreen(
     val viewerCount by viewModel.viewerCount.collectAsState()
     val poll by viewModel.poll.collectAsState()
     val pinnedMessage by viewModel.pinnedMessage.collectAsState()
-    val channelPoints by viewModel.channelPoints.collectAsState()
-    val isChannelToolsVisible by viewModel.isChannelToolsVisible.collectAsState()
     val isChatterListVisible by viewModel.isChatterListVisible.collectAsState()
     val chatters by viewModel.chatters.collectAsState()
     val isChattersLoading by viewModel.isChattersLoading.collectAsState()
@@ -917,26 +915,10 @@ fun ChatScreen(
                                 keyboardController?.hide()
                                 viewModel.onEmoteMenuToggled()
                             },
-                            onChannelToolsClick = {
-                                keyboardController?.hide()
-                                viewModel.onChannelToolsToggled()
-                            },
-                            hasActivePoll = poll != null,
                             enabled = !isBanned
                         )
                     }
                 }
-            }
-
-            if (isChannelToolsVisible) {
-                ChannelToolsSheet(
-                    state = channelPoints,
-                    poll = poll,
-                    onRefresh = { viewModel.refreshChannelPoints() },
-                    onRedeem = { reward, input -> viewModel.redeemReward(reward, input) },
-                    onVote = { pollId, choiceId -> viewModel.voteOnPoll(pollId, choiceId) },
-                    onDismiss = { viewModel.onChannelToolsDismissed() }
-                )
             }
 
             if (isEmoteMenuVisible) {
@@ -1740,8 +1722,6 @@ fun ChatInputBar(
     onTextChanged: (TextFieldValue) -> Unit,
     onSendClick: () -> Unit,
     onEmoteClick: () -> Unit,
-    onChannelToolsClick: () -> Unit,
-    hasActivePoll: Boolean = false,
     enabled: Boolean = true
 ) {
     Surface(
@@ -1756,18 +1736,6 @@ fun ChatInputBar(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(start = 4.dp, end = 8.dp)
         ) {
-            // Channel tools (channel points, active poll, pinned message) on the far left
-            IconButton(
-                onClick = onChannelToolsClick,
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(
-                    Icons.Filled.Redeem,
-                    contentDescription = stringResource(R.string.channel_tools),
-                    tint = if (hasActivePoll) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
             IconButton(
                 onClick = onEmoteClick,
                 enabled = enabled,

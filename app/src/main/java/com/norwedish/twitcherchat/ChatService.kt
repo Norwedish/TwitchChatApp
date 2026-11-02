@@ -234,10 +234,6 @@ class ChatService : Service() {
     private val _pinnedMessage = MutableStateFlow<PinnedMessage?>(null)
     val pinnedMessage = _pinnedMessage.asStateFlow()
 
-    // Channel points: balance, rewards and the last redemption receipt
-    private val _channelPoints = MutableStateFlow(ChannelPointsState())
-    val channelPoints = _channelPoints.asStateFlow()
-
     private val _roomState = MutableStateFlow<RoomState?>(null)
     val roomState = _roomState.asStateFlow()
 
@@ -245,10 +241,6 @@ class ChatService : Service() {
     val chatters = _chatters.asStateFlow()
 
     private val currentChatters = Collections.synchronizedSet(mutableSetOf<String>())
-
-    /** Login of the channel this service is connected to (used for channel points lookups). */
-    @Volatile
-    private var currentChannelName: String = ""
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -275,7 +267,6 @@ class ChatService : Service() {
 
         val channelName = intent?.getStringExtra("channelName") ?: return START_NOT_STICKY
         val twitchUserId = intent.getStringExtra("twitchUserId")
-        currentChannelName = channelName
 
         createNotificationChannel()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -434,7 +425,6 @@ class ChatService : Service() {
         connectionJob?.cancel()
         _poll.value = null
         _pinnedMessage.value = null
-        _channelPoints.value = ChannelPointsState()
         _roomState.value = null
         _connectionState.value = ConnectionState.DISCONNECTED
     }
@@ -825,30 +815,6 @@ class ChatService : Service() {
                         tags = mapOf("client" to "poll_vote_error")
                     )
                 )
-            }
-        }
-    }
-
-    /** Loads the channel points balance and rewards for [channelLogin] / [channelId]. */
-    fun loadChannelPoints(channelLogin: String, channelId: String) {
-        serviceScope.launch {
-            _channelPoints.update { it.copy(isLoading = true, error = null) }
-            val state = ChannelToolsApi.loadChannelPoints(client, channelLogin, channelId)
-            _channelPoints.value = state.copy(
-                isLoading = false,
-                lastRedemption = _channelPoints.value.lastRedemption
-            )
-        }
-    }
-
-    /** Redeems a channel points reward and stores the receipt in [channelPoints]. */
-    fun redeemReward(channelId: String, reward: ChannelReward, input: String? = null) {
-        serviceScope.launch {
-            val receipt = ChannelToolsApi.redeemReward(client, channelId, reward, input)
-            _channelPoints.update { it.copy(lastRedemption = receipt) }
-            if (receipt.success) {
-                // Refresh the balance so the menu shows the new amount
-                loadChannelPoints(currentChannelName, channelId)
             }
         }
     }
