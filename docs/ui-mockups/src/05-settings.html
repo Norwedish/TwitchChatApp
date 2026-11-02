@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=Lato:wght@400;700&family=Roboto+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:412px; height:915px; overflow:hidden; background:#0E0E10; font-family:'Lato',sans-serif; color:#EFEFF1; }
+  .statusbar { height:44px; display:flex; justify-content:space-between; align-items:center; padding:0 24px; font-size:14px; font-weight:700; }
+  .statusbar .icons { letter-spacing:4px; font-size:12px; }
+  .topbar { height:64px; display:flex; align-items:center; padding:0 8px 0 4px; background:#18181B; gap:8px; }
+  .back { width:40px; height:40px; display:flex; align-items:center; justify-content:center; }
+  .topbar .title { font-family:'Chakra Petch',sans-serif; font-weight:600; font-size:20px; flex:1; }
+  .resetbtn { display:flex; align-items:center; gap:4px; color:#BF94FF; font-weight:700; font-size:14px; padding:8px 12px; border-radius:20px; }
+  .content { padding:16px; height:851px; overflow:hidden; }
+  .intro { background:#3B0F86; border-radius:20px; padding:16px; display:flex; gap:12px; }
+  .intro .t { font-weight:700; font-size:14px; color:#fff; margin-bottom:4px; }
+  .intro .d { font-size:12px; line-height:17px; color:rgba(255,255,255,.85); }
+  .grouptitle { color:#9146FF; font-weight:700; font-size:16px; margin:16px 2px 6px; }
+  .card { background:#1F1F23; border-radius:20px; padding:4px 0; }
+  .row { display:flex; align-items:center; padding:10px 16px; }
+  .row + .row { border-top:1px solid #2A2A30; }
+  .rinfo { flex:1; }
+  .rname { font-size:15px; font-weight:700; }
+  .rid { font-family:'Roboto Mono',monospace; font-size:11px; color:#ADADB8; margin-top:2px; }
+  .switch { width:44px; height:26px; border-radius:13px; background:#9146FF; position:relative; flex-shrink:0; }
+  .switch::after { content:""; position:absolute; right:3px; top:3px; width:20px; height:20px; border-radius:50%; background:#fff; }
+  .switch.off { background:#3A3A42; }
+  .switch.off::after { left:3px; right:auto; }
+  .expl { font-size:12px; color:#ADADB8; line-height:16px; margin:2px 2px 8px; }
+  .chip { display:inline-flex; align-items:center; gap:6px; background:#2A2A30; border:1px solid #3A3A42; color:#EFEFF1; border-radius:16px; padding:6px 10px; font-family:'Roboto Mono',monospace; font-size:12px; margin:0 8px 8px 0; }
+  .addrow { display:flex; gap:8px; align-items:center; margin-top:4px; }
+  .field { flex:1; height:52px; border:1.5px solid #3A3A42; border-radius:14px; background:#18181B; display:flex; align-items:center; padding:0 14px; color:#6b6b76; font-size:13px; }
+  .addbtn { height:48px; background:#772CE8; color:#fff; border-radius:14px; padding:0 16px; display:flex; align-items:center; gap:6px; font-weight:700; font-size:14px; }
+</style>
+</head>
+<body>
+  <div class="statusbar"><span>9:41</span><span class="icons">▲ ■ ●</span></div>
+  <div class="topbar">
+    <div class="back"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#EFEFF1" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></div>
+    <span class="title">Chat settings</span>
+    <span class="resetbtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 9 8 9"/></svg>Reset</span>
+  </div>
+  <div class="content">
+    <div class="intro">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" style="flex-shrink:0;margin-top:2px"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      <div><div class="t">What does this screen do?</div><div class="d">Twitch sends a system NOTICE when the chat mode changes. The current mode is always shown in the banner above the chat input. Switch ON = hide the notice in chat. Saved automatically.</div></div>
+    </div>
+    <div class="grouptitle">Slow mode</div>
+    <div class="card">
+      <div class="row"><div class="rinfo"><div class="rname">Turned on</div><div class="rid">msg-id: slow_on</div></div><div class="switch"></div></div>
+      <div class="row"><div class="rinfo"><div class="rname">Turned off</div><div class="rid">msg-id: slow_off</div></div><div class="switch"></div></div>
+    </div>
+    <div class="grouptitle">Emote-only</div>
+    <div class="card">
+      <div class="row"><div class="rinfo"><div class="rname">Turned on</div><div class="rid">msg-id: emote_only_on</div></div><div class="switch"></div></div>
+      <div class="row"><div class="rinfo"><div class="rname">Turned off</div><div class="rid">msg-id: emote_only_off</div></div><div class="switch off"></div></div>
+    </div>
+    <div class="grouptitle">Subscribers-only</div>
+    <div class="card">
+      <div class="row"><div class="rinfo"><div class="rname">Turned on</div><div class="rid">msg-id: subs_on</div></div><div class="switch"></div></div>
+      <div class="row"><div class="rinfo"><div class="rname">Turned off</div><div class="rid">msg-id: subs_off</div></div><div class="switch"></div></div>
+    </div>
+    <div class="grouptitle">Unique chat (R9K)</div>
+    <div class="card">
+      <div class="row"><div class="rinfo"><div class="rname">Turned on</div><div class="rid">msg-id: r9k_on</div></div><div class="switch"></div></div>
+      <div class="row"><div class="rinfo"><div class="rname">Turned off</div><div class="rid">msg-id: r9k_off</div></div><div class="switch"></div></div>
+    </div>
+    <div class="grouptitle">Custom hidden msg-ids</div>
+    <div class="expl">Hide any other NOTICE by its msg-id — e.g. from bots. Tap a chip to remove it.</div>
+    <span class="chip">msg_channel_suspended <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ADADB8" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+    <div class="addrow">
+      <div class="field">msg-id to hide (e.g. msg_channel_suspended)</div>
+      <div class="addbtn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add</div>
+    </div>
+  </div>
+</body>
+</html>

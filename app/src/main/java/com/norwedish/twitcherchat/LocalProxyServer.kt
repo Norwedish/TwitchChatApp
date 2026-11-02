@@ -1,7 +1,11 @@
 package com.norwedish.twitcherchat
 
 /**
- * Local HTTP proxy used to rewrite Twitch HLS playlists so receivers (Cast) can access segments via LAN.
+ * Local HTTP proxy used to rewrite Twitch HLS playlists so receivers (Chromecast) can access
+ * segments via the LAN. The in-app video player does not need this: a native player has no CORS
+ * restrictions, so it plays the signed HTTPS usher URL directly (the OAuth token in that URL is
+ * what makes Twitch serve subscriber streams ad-free).
+ *
  * This module implements a tiny embedded server and playlist/segment rewrites.
  */
 
@@ -105,6 +109,26 @@ object LocalProxyServer {
         return "${getBaseUrl()}/stream?source=$encoded"
     }
 
+    /**
+     * Picks the host to put in rewritten playlist URLs: the Host header of the incoming request
+     * when it is a loopback address or one of this device's own interface addresses, otherwise
+     * the primary LAN address (for Chromecast). Prevents host-header poisoning of rewritten URLs.
+     */
+    private fun rewriteHost(session: NanoHTTPD.IHTTPSession): String {
+        val host = session.headers["host"]?.substringBefore(":")?.trim().orEmpty()
+        if (host == "127.0.0.1" || host == "localhost" || host == "::1") return host
+        val ownAddresses = try {
+            NetworkInterface.getNetworkInterfaces()?.toList()
+                ?.flatMap { it.inetAddresses.toList() }
+                ?.mapNotNull { it.hostAddress }
+                ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        return if (host.isNotEmpty() && ownAddresses.contains(host)) host
+        else findLocalIpAddress() ?: "127.0.0.1"
+    }
+
     private fun findLocalIpAddress(): String? {
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces()
@@ -167,19 +191,20 @@ object LocalProxyServer {
             }
 
             try {
-                Log.d(TAG, "handleStream request for remote playlist: ${remote}")
+                Log.d(TAG, "handleStream request for remote playlist: ${TwitchApi.redactStreamUrl(remote.toString())}")
                 lastPlaylistRequested = remote.toString()
                 val conn = remote.openConnection() as HttpURLConnection
                 conn.instanceFollowRedirects = true
                 // Use a browser-like User-Agent to increase acceptance by remote servers (Twitch sometimes blocks non-browser UAs)
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android 10; Mobile; rv:115.0) Gecko/115.0 Firefox/115.0")
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36")
                 conn.setRequestProperty("Accept", "*/*")
+                conn.setRequestProperty("Origin", "https://www.twitch.tv")
                 conn.setRequestProperty("Referer", "https://www.twitch.tv/")
                 conn.connectTimeout = 8000
                 conn.readTimeout = 15000
                 conn.connect()
                 val code = conn.responseCode
-                Log.d(TAG, "Fetched remote playlist: ${remote} -> HTTP $code")
+                Log.d(TAG, "Fetched remote playlist: ${TwitchApi.redactStreamUrl(remote.toString())} -> HTTP $code")
                 if (code !in 200..299) {
                     val msg = conn.responseMessage
                     conn.disconnect()
@@ -189,28 +214,26 @@ object LocalProxyServer {
                 val text = conn.inputStream.bufferedReader().use { it.readText() }
                 conn.disconnect()
 
-                // Rewrite URI lines. Always use our own address: a client-supplied Host
-                // header would otherwise poison the rewritten playlist URLs.
+                // Rewrite URI lines to point back at this proxy. Use the host the client actually
+                // connected to (validated against this device's own addresses) so the in-app player
+                // on 127.0.0.1 gets loopback URLs (cleartext to the LAN IP is blocked by the network
+                // security config), while Chromecast on the LAN gets the LAN address. A client-supplied
+                // Host header that is NOT one of our own addresses is ignored, so it cannot poison the
+                // rewritten playlist URLs.
                 val base = remote
-                val prefix = "http://${findLocalIpAddress() ?: "127.0.0.1"}:$listeningPort"
+                val prefix = "http://${rewriteHost(session)}:$listeningPort"
 
-                val rewritten = text.lines().joinToString(separator = "\r\n") { line ->
-                    val trim = line.trim()
-                    if (trim.isEmpty() || trim.startsWith("#")) return@joinToString line
-                    try {
-                        val resolved = URL(base, trim).toString()
-                        val enc = URLEncoder.encode(resolved, "UTF-8")
-                        Log.d(TAG, "Rewriting playlist line. original=$trim resolved=$resolved -> $prefix/segment?u=$enc")
-                        "$prefix/segment?u=$enc"
-                    } catch (e: Exception) {
-                        line
-                    }
-                }
+                val rewritten = rewritePlaylist(text, base, prefix)
 
                 // Use application/x-mpegURL which is commonly accepted for HLS playlists
                 val resp = newFixedLengthResponse(Response.Status.OK, "application/x-mpegURL", rewritten)
                 resp.addHeader("Access-Control-Allow-Origin", "*")
-                resp.addHeader("Access-Control-Allow-Headers", "Range,Content-Type")
+                resp.addHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+                resp.addHeader("Access-Control-Allow-Headers", "Range, Content-Type")
+                // Players need these to issue range requests from a (browser) context
+                resp.addHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges")
+                // Playlists/tokens are short-lived; never cache them
+                resp.addHeader("Cache-Control", "no-store")
                 Log.d(TAG, "Returning rewritten playlist to client: ${session.remoteIpAddress}")
                 return resp
             } catch (e: Exception) {
@@ -220,6 +243,42 @@ object LocalProxyServer {
         }
 
         // Note: upstream connections are disconnected on every path (success, error, exception).
+
+        /**
+         * Rewrites every URI line in a playlist to go through this proxy. This covers plain
+         * segment/variant lines AND the URI="..." attribute of #EXT-X-KEY / #EXT-X-MAP tags, so
+         * AES-128 encrypted streams keep working through the proxy as well.
+         */
+        private fun rewritePlaylist(text: String, base: URL, prefix: String): String {
+            val uriAttr = Regex("""URI="([^"]+)"""")
+            return text.lines().joinToString(separator = "\r\n") { line ->
+                val trim = line.trim()
+                if (trim.isEmpty()) return@joinToString line
+
+                // Rewrite URI="..." inside tag lines (EXT-X-KEY, EXT-X-MAP, EXT-X-MEDIA, ...)
+                if (trim.startsWith("#")) {
+                    return@joinToString uriAttr.replace(trim) { m ->
+                        try {
+                            val resolved = URL(base, m.groupValues[1]).toString()
+                            val enc = URLEncoder.encode(resolved, "UTF-8")
+                            """URI="$prefix/segment?u=$enc""""
+                        } catch (e: Exception) {
+                            m.value
+                        }
+                    }
+                }
+
+                // Plain URI line (variant playlist or segment)
+                try {
+                    val resolved = URL(base, trim).toString()
+                    val enc = URLEncoder.encode(resolved, "UTF-8")
+                    Log.d(TAG, "Rewriting playlist line. original=$trim resolved=$resolved -> $prefix/segment?u=$enc")
+                    "$prefix/segment?u=$enc"
+                } catch (e: Exception) {
+                    line
+                }
+            }
+        }
 
         private fun handleSegment(session: IHTTPSession): Response {
             val params = session.parameters
@@ -241,8 +300,9 @@ object LocalProxyServer {
                 val range = session.headers["range"]
                 if (!range.isNullOrEmpty()) conn.setRequestProperty("Range", range)
                 // Use a browser-like User-Agent for segment requests as well
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android 10; Mobile; rv:115.0) Gecko/115.0 Firefox/115.0")
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36")
                 conn.setRequestProperty("Accept", "*/*")
+                conn.setRequestProperty("Origin", "https://www.twitch.tv")
                 conn.setRequestProperty("Referer", "https://www.twitch.tv/")
                 conn.connectTimeout = 10000
                 conn.readTimeout = 20000
@@ -276,7 +336,10 @@ object LocalProxyServer {
                 conn.getHeaderField("Accept-Ranges")?.let { resp.addHeader("Accept-Ranges", it) }
                 conn.getHeaderField("Content-Length")?.let { resp.addHeader("Content-Length", it) }
                 try { resp.addHeader("Access-Control-Allow-Origin", "*") } catch (_: Exception) {}
-                try { resp.addHeader("Access-Control-Allow-Headers", "Range,Content-Type") } catch (_: Exception) {}
+                try { resp.addHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS") } catch (_: Exception) {}
+                try { resp.addHeader("Access-Control-Allow-Headers", "Range, Content-Type") } catch (_: Exception) {}
+                try { resp.addHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges") } catch (_: Exception) {}
+                try { resp.addHeader("Cache-Control", "no-store") } catch (_: Exception) {}
                 Log.d(TAG, "Responding to client ${session.remoteIpAddress} with contentType=$contentType, code=$code")
                 return resp
             } catch (e: Exception) {

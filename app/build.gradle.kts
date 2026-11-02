@@ -85,6 +85,11 @@ dependencies {
     // Encrypted at-rest storage for the OAuth token and user profile
     implementation(libs.androidx.security.crypto)
 
+    // In-app HLS video player (plays the stream above the chat via the local proxy)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.ui)
+
     implementation(libs.gson)
 
     // Image loading with memory/disk caching (configured in MyApplication)

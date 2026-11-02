@@ -315,6 +315,30 @@ fun ChatScreen(
     // Observe Cast debug state to surface errors and provide retry/fallback actions
     // (currently unused; keep the state in CastManager)
 
+    // In-app stream player above the chat
+    var showStreamPlayer by remember { mutableStateOf(false) }
+    var streamPlaybackUrl by remember { mutableStateOf<String?>(null) }
+    var isLoadingStream by remember { mutableStateOf(false) }
+
+    // Resolve the signed stream URL when the player is opened. A native player has no CORS
+    // restrictions, so it plays the HTTPS usher URL directly; the OAuth token in that URL is
+    // what makes Twitch serve the stream ad-free for subscribers. The local proxy is used for
+    // Chromecast (a LAN receiver), not for in-app playback.
+    LaunchedEffect(showStreamPlayer, channelName) {
+        if (!showStreamPlayer) {
+            streamPlaybackUrl = null
+            return@LaunchedEffect
+        }
+        isLoadingStream = true
+        streamPlaybackUrl = try {
+            TwitchApi.getStreamUrl(channelName)
+        } catch (e: Exception) {
+            Log.e("ChatScreen", "Failed to resolve playback URL", e)
+            null
+        }
+        isLoadingStream = false
+    }
+
     if (isChatterListVisible) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(onDismissRequest = { viewModel.onChatterListDismissed() }, sheetState = sheetState) {
@@ -401,7 +425,7 @@ fun ChatScreen(
                             coroutineScope.launch {
                                 try {
                                     val streamUrl = TwitchApi.getStreamUrl(channelName)
-                                    Log.d("ChatScreen", "Stream URL: $streamUrl")
+                                    Log.d("ChatScreen", "Stream URL: ${streamUrl?.let { TwitchApi.redactStreamUrl(it) } ?: "null"}")
                                     if (streamUrl != null) {
                                         CastManager.startCasting(
                                             url = streamUrl,
@@ -552,6 +576,15 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    // In-app video player toggle (stream plays above the chat)
+                    IconButton(onClick = { showStreamPlayer = !showStreamPlayer }) {
+                        Icon(
+                            imageVector = if (showStreamPlayer) Icons.Default.VisibilityOff else Icons.Default.PlayCircle,
+                            contentDescription = stringResource(
+                                if (showStreamPlayer) R.string.hide_stream else R.string.watch_stream
+                            )
+                        )
+                    }
                     // Chromecast / Cast button - show native MediaRouteButton when available
                     // (connection state lives in a slim banner above the message list instead)
                     CastButton(modifier = Modifier.size(48.dp))
@@ -569,6 +602,40 @@ fun ChatScreen(
                  .navigationBarsPadding()
                  .imePadding()
         ) {
+            // In-app stream player above the chat (16:9), only when enabled
+            AnimatedVisibility(visible = showStreamPlayer) {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    when {
+                        streamPlaybackUrl != null -> StreamPlayer(
+                            url = streamPlaybackUrl!!,
+                            onClose = { showStreamPlayer = false }
+                        )
+                        isLoadingStream -> Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(16f / 9f)
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator()
+                        }
+                        else -> Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(16f / 9f)
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = stringResource(R.string.stream_load_error),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+            }
+
             // Slim connection banner above the messages, only shown when NOT connected
             AnimatedVisibility(visible = connectionState != ConnectionState.CONNECTED) {
                 ConnectionStateBanner(state = connectionState)

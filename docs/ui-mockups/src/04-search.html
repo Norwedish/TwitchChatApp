@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=Lato:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:412px; height:915px; overflow:hidden; background:#0E0E10; font-family:'Lato',sans-serif; color:#EFEFF1; }
+  .statusbar { height:44px; display:flex; justify-content:space-between; align-items:center; padding:0 24px; font-size:14px; font-weight:700; }
+  .statusbar .icons { letter-spacing:4px; font-size:12px; }
+  .topbar { height:64px; display:flex; align-items:center; padding:0 8px 0 4px; background:#18181B; gap:8px; }
+  .back { width:40px; height:40px; display:flex; align-items:center; justify-content:center; }
+  .topbar .title { font-family:'Chakra Petch',sans-serif; font-weight:600; font-size:20px; }
+  .searchwrap { padding:12px 16px 0; }
+  .search { height:52px; border:1.5px solid #3A3A42; border-radius:28px; display:flex; align-items:center; padding:0 8px 0 16px; gap:10px; background:#18181B; }
+  .search .q { flex:1; font-size:15px; }
+  .search .clear { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ADADB8; }
+  .progress { height:3px; margin:10px 16px 0; background:#9146FF; border-radius:2px; width:45%; }
+  .results { padding:8px 0; }
+  .row { display:flex; align-items:center; gap:12px; padding:12px 16px; }
+  .thumb { width:48px; height:48px; border-radius:12px; flex-shrink:0; }
+  .thumb.g1 { background:linear-gradient(135deg,#0f3460,#e94560); }
+  .thumb.g2 { background:linear-gradient(135deg,#134e4a,#71b280); }
+  .thumb.g3 { background:linear-gradient(135deg,#3b0f86,#9146ff); }
+  .thumb.g4 { background:linear-gradient(135deg,#5f0f40,#fb8b24); }
+  .rinfo { flex:1; min-width:0; }
+  .rname { font-weight:700; font-size:16px; }
+  .rtitle { color:#ADADB8; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rgame { color:#9146FF; font-size:12px; }
+  .live { background:#EB0400; color:#fff; border-radius:6px; padding:3px 6px; font-size:10px; font-weight:700; letter-spacing:.5px; }
+</style>
+</head>
+<body>
+  <div class="statusbar"><span>9:41</span><span class="icons">▲ ■ ●</span></div>
+  <div class="topbar">
+    <div class="back"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#EFEFF1" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></div>
+    <span class="title">Search streamers</span>
+  </div>
+  <div class="searchwrap">
+    <div class="search">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ADADB8" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      <span class="q">ninja</span>
+      <span class="clear"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+    </div>
+  </div>
+  <div class="progress"></div>
+  <div class="results">
+    <div class="row"><div class="thumb g1"></div><div class="rinfo"><div class="rname">Ninja</div><div class="rtitle">Fortnite with the squad — !socials</div><div class="rgame">Fortnite</div></div><span class="live">LIVE</span></div>
+    <div class="row"><div class="thumb g2"></div><div class="rinfo"><div class="rname">shroud</div><div class="rtitle">VALORANT ranked grind</div><div class="rgame">VALORANT</div></div><span class="live">LIVE</span></div>
+    <div class="row"><div class="thumb g3"></div><div class="rinfo"><div class="rname">pokimane</div><div class="rtitle">Just Chatting</div><div class="rgame">Just Chatting</div></div></div>
+    <div class="row"><div class="thumb g4"></div><div class="rinfo"><div class="rname">tfue</div><div class="rtitle">GTA RP — chaos ensues</div><div class="rgame">Grand Theft Auto V</div></div><span class="live">LIVE</span></div>
+  </div>
+</body>
+</html>

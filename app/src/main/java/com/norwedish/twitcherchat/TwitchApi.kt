@@ -245,52 +245,120 @@ object TwitchApi {
         // This is the public, non-secret client-id used by the Twitch website.
         val gqlClientId = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 
-        val playbackAccessToken = try {
-            // Build the JSON with kotlinx.serialization so a channel name can never break/inject the body
-            val gqlRequest = buildJsonObject {
-                put("operationName", "PlaybackAccessToken")
-                putJsonObject("variables") {
-                    put("isLive", true)
-                    put("login", channelName)
-                    put("isVod", false)
-                    put("vodID", "")
-                    put("playerType", "embed")
+        // Build the JSON with kotlinx.serialization so a channel name can never break/inject the body
+        fun gqlRequest(channel: String) = buildJsonObject {
+            put("operationName", "PlaybackAccessToken")
+            putJsonObject("variables") {
+                put("isLive", true)
+                put("login", channel)
+                put("isVod", false)
+                put("vodID", "")
+                put("playerType", "site")
+            }
+            putJsonObject("extensions") {
+                putJsonObject("persistedQuery") {
+                    put("version", 1)
+                    put("sha256Hash", "0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712")
                 }
-                putJsonObject("extensions") {
-                    putJsonObject("persistedQuery") {
-                        put("version", 1)
-                        put("sha256Hash", "0828119ded1c13477966434e15800ff57ddacf13ba1911c129dc2200705b0712")
-                    }
-                }
-            }.toString()
+            }
+        }.toString()
 
-            val response: PlaybackAccessTokenResponse = client.post("https://gql.twitch.tv/gql") {
-                header("Client-ID", gqlClientId)
-                // If we have a logged-in user's OAuth token, include it so Twitch can return a playback
-                // token that reflects subscriber status / ad-free eligibility for that user.
-                UserManager.accessToken?.let { auth ->
-                    header("Authorization", "Bearer $auth")
+        suspend fun requestToken(channel: String, withAuth: Boolean): io.ktor.client.statement.HttpResponse? {
+            return try {
+                client.post("https://gql.twitch.tv/gql") {
+                    header("Client-ID", gqlClientId)
+                    // If we have a logged-in user's OAuth token, include it so Twitch can return a
+                    // playback token that reflects subscriber status / Turbo / Prime, which is what
+                    // makes Twitch serve the stream without ads for that user.
+                    if (withAuth) {
+                        UserManager.accessToken?.let { auth ->
+                            header("Authorization", "Bearer $auth")
+                        }
+                    }
+                    contentType(ContentType.Application.Json)
+                    setBody(gqlRequest(channel))
                 }
-                contentType(ContentType.Application.Json)
-                setBody(gqlRequest)
-            }.body()
-            response.data?.streamPlaybackAccessToken
+            } catch (e: Exception) {
+                Log.e("TwitchApi", "Failed to get playback access token", e)
+                null
+            }
+        }
+
+        val login = channelName.lowercase()
+        var response = requestToken(login, withAuth = true)
+        // Expired or invalid token? Fall back to an anonymous request so the stream still works
+        // (it will then contain ads, but playback is not blocked).
+        if (response != null && (response.status.value == 401 || response.status.value == 403)) {
+            Log.w("TwitchApi", "PlaybackAccessToken rejected with HTTP ${response.status.value}; retrying anonymously")
+            response = requestToken(login, withAuth = false)
+        }
+        if (response == null || !response.status.isSuccess()) {
+            Log.e("TwitchApi", "PlaybackAccessToken failed: HTTP ${response?.status?.value ?: "network error"}")
+            return null
+        }
+
+        val playbackAccessToken = try {
+            val body: PlaybackAccessTokenResponse = response.body()
+            body.data?.streamPlaybackAccessToken
         } catch (e: Exception) {
-            Log.e("TwitchApi", "Failed to get playback access token", e)
+            Log.e("TwitchApi", "Failed to parse playback access token", e)
             null
         }
 
+        // Twitch decides on ads from this token. Log only the ad-related flags (never the token
+        // itself) so it is possible to see whether the logged-in account actually gets ad-free
+        // playback.
+        playbackAccessToken?.let { logPlaybackTokenClaims(login, it.value) }
+
         return playbackAccessToken?.let {
-            val url = "https://usher.ttvnw.net/api/channel/hls/$channelName.m3u8"
+            val url = "https://usher.ttvnw.net/api/channel/hls/$login.m3u8"
             val params = Parameters.build {
                 append("client_id", gqlClientId)
                 append("token", it.value)
                 append("sig", it.signature)
                 append("allow_source", "true")
                 append("allow_audio_only", "true")
+                append("player", "twitchweb")
+                append("p", (1_000_000..9_999_999).random().toString())
+                append("type", "any")
+                append("allow_spectre", "false")
             }.formUrlEncode()
             url + "?" + params
         }
+    }
+
+    /**
+     * The playback token is a secret credential: never write the full stream URL (which contains
+     * token+sig in the query) to logs or error messages.
+     */
+    fun redactStreamUrl(url: String): String =
+        url.replace(Regex("([?&](?:token|sig|nauth|nauthsig)=)[^&]*", RegexOption.IGNORE_CASE), "$1***")
+
+    /**
+     * Logs the ad-related flags from a PlaybackAccessToken (never the token itself). Twitch reports
+     * `hide_ads`, `subscriber` and `turbo` there, which is what determines whether the stream is
+     * served without ad breaks.
+     */
+    private fun logPlaybackTokenClaims(channel: String, tokenValue: String) {
+        val claims = runCatching {
+            val payload = tokenValue.substringAfter('.', tokenValue).substringBefore('.')
+            String(
+                android.util.Base64.decode(
+                    payload,
+                    android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                ),
+                Charsets.UTF_8
+            )
+        }.getOrNull() ?: return
+        val adFree = Regex(""""hide_ads"\s*:\s*(true|false)""").find(claims)?.groupValues?.get(1)
+        val subscriber = Regex(""""subscriber"\s*:\s*(true|false)""").find(claims)?.groupValues?.get(1)
+        val turbo = Regex(""""turbo"\s*:\s*(true|false)""").find(claims)?.groupValues?.get(1)
+        val userId = Regex(""""user_id"\s*:\s*"?(\d+)?"?""").find(claims)?.groupValues?.get(1)
+        Log.d(
+            "TwitchApi",
+            "PlaybackAccessToken for $channel: hide_ads=$adFree subscriber=$subscriber turbo=$turbo " +
+                "user_id=${userId ?: "anonymous"}"
+        )
     }
 
     /**

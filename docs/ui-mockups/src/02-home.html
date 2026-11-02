@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=Lato:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:412px; height:915px; overflow:hidden; background:#0E0E10; font-family:'Lato',sans-serif; color:#EFEFF1; }
+  .statusbar { height:44px; display:flex; justify-content:space-between; align-items:center; padding:0 24px; font-size:14px; font-weight:700; }
+  .statusbar .icons { letter-spacing:4px; font-size:12px; }
+  .topbar { height:64px; display:flex; align-items:center; padding:0 16px; background:#18181B; gap:10px; }
+  .topbar .logo { width:34px; height:34px; object-fit:contain; }
+  .topbar .title { font-family:'Chakra Petch',sans-serif; font-weight:600; font-size:20px; flex:1; }
+  .iconbtn { width:40px; height:40px; display:flex; align-items:center; justify-content:center; border-radius:50%; }
+  .avatar { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,#BF94FF,#772CE8); }
+  .list { padding:16px; }
+  .section { font-family:'Lato',sans-serif; font-weight:700; font-size:16px; color:#9146FF; margin:4px 2px 12px; }
+  .card { background:#1F1F23; border-radius:20px; overflow:hidden; margin-bottom:16px; }
+  .thumb { position:relative; width:100%; aspect-ratio:16/9; }
+  .thumb.t1 { background:linear-gradient(135deg,#2b1055,#7597de); }
+  .thumb.t2 { background:linear-gradient(135deg,#0f3460,#e94560); }
+  .thumb::after { content:""; position:absolute; inset:0; background:linear-gradient(180deg,rgba(0,0,0,.25),transparent 40%,rgba(0,0,0,.45)); }
+  .live { position:absolute; top:10px; left:10px; background:#EB0400; color:#fff; border-radius:8px; padding:4px 8px;
+          font-size:11px; font-weight:700; letter-spacing:.5px; display:flex; align-items:center; gap:5px; z-index:2; }
+  .live::before { content:""; width:7px; height:7px; background:#fff; border-radius:50%; }
+  .viewers { position:absolute; bottom:10px; right:10px; background:rgba(0,0,0,.65); color:#fff; border-radius:8px; padding:4px 8px;
+             font-size:12px; font-weight:700; display:flex; align-items:center; gap:4px; z-index:2; }
+  .cardbody { display:flex; align-items:center; gap:12px; padding:14px; }
+  .cardbody .pavatar { width:44px; height:44px; border-radius:50%; flex-shrink:0; }
+  .cardbody .pavatar.a1 { background:linear-gradient(135deg,#FFD700,#FF8C00); }
+  .cardbody .pavatar.a2 { background:linear-gradient(135deg,#00F5D4,#0090FF); }
+  .cardbody .info { flex:1; min-width:0; }
+  .cardbody .name { font-weight:700; font-size:17px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cardbody .title { color:#ADADB8; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
+  .gamechip { display:inline-block; margin:0 14px 12px; background:#3B0F86; color:#BF94FF; border-radius:8px; padding:4px 10px; font-size:12px; }
+  .fab { position:absolute; right:16px; bottom:24px; width:56px; height:56px; border-radius:16px; background:#9146FF;
+         display:flex; align-items:center; justify-content:center; box-shadow:0 6px 18px rgba(145,70,255,.45); }
+</style>
+</head>
+<body>
+  <div class="statusbar"><span>9:41</span><span class="icons">▲ ■ ●</span></div>
+  <div class="topbar">
+    <img class="logo" src="logo.png" alt="TwitcherChat logo">
+    <span class="title">TwitcherChat</span>
+    <div class="iconbtn"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#EFEFF1" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+    <div class="avatar"></div>
+  </div>
+  <div class="list">
+    <div class="section">2 live now</div>
+    <div class="card">
+      <div class="thumb t1"><span class="live">LIVE</span><span class="viewers">👁 12.4K</span></div>
+      <div class="cardbody">
+        <div class="pavatar a1"></div>
+        <div class="info"><div class="name">xQc</div><div class="title">POV: you vs the chat — no mercy</div></div>
+      </div>
+      <span class="gamechip">Just Chatting</span>
+    </div>
+    <div class="card">
+      <div class="thumb t2"><span class="live">LIVE</span><span class="viewers">👁 48.1K</span></div>
+      <div class="cardbody">
+        <div class="pavatar a2"></div>
+        <div class="info"><div class="name">Ninja</div><div class="title">Ranked grind to Radiant — !sens</div></div>
+      </div>
+      <span class="gamechip">VALORANT</span>
+    </div>
+  </div>
+  <div class="fab"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg></div>
+</body>
+</html>

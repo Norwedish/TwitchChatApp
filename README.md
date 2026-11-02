@@ -38,6 +38,8 @@ Notes and assumptions
 - Full chat: messages with badges, Twitch/BTTV/7TV/FFZ emotes, @mentions, replies, polls,
   URL links, deleted-message handling, chatter list, user profiles, moderation (timeout/ban with confirmation)
 - Search for channels and jump straight into their chat
+- In-app video player above the chat (Media3 ExoPlayer, HLS) — plays the signed usher stream
+  directly over HTTPS; a toggle in the chat top bar shows/hides it
 - Chromecast support (local HLS proxy with an allowlisted, LAN-reachable proxy server)
 - Real-time "went live" updates via EventSub WebSocket + intelligent polling + background WorkManager
   with notifications
@@ -140,6 +142,23 @@ If you run into Gradle daemon or JDK issues, open the project in Android Studio 
 - Images: Coil with memory/disk cache (configured in `MyApplication`)
 - Persistence: EncryptedSharedPreferences (token/user), SharedPreferences (settings, live-stream state)
 - Casting: Google Cast framework + `LocalProxyServer` (NanoHTTPD, allowlisted to *.ttvnw.net)
+- Playback: `TwitchApi.getStreamUrl()` fetches a PlaybackAccessToken via GQL with the logged-in
+  user's OAuth token (so Twitch serves subscriber/Turbo/Prime streams ad-free; on 401/403 it
+  retries anonymously), then builds the signed usher HLS URL. The in-app player plays this URL
+  directly (native players have no CORS limits); `LocalProxyServer` rewrites playlists/segments
+  for the Chromecast receiver and adds CORS headers there.
+
+### Ads
+
+Twitch decides whether a stream gets ad breaks from the PlaybackAccessToken, not from the player.
+The app therefore requests the token with the logged-in user's OAuth token: with an active
+subscription (or Turbo/Prime) Twitch returns a token that marks the stream as ad-free
+(`hide_ads`/`subscriber`/`turbo`), and the HLS playlist then contains no ad segments. The
+ad-related flags are logged (never the token itself) so this is verifiable in logcat.
+
+There is no client-side "ad blocker" on top of that: the ads are part of the same HLS stream, so
+skipping them in the player would mean skipping live content. Without a subscription the stream
+simply contains Twitch's ad breaks.
 
 ## Testing
 
